@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import {
   AUTO_FARM_LIST_PREFIX, FARM_LIST_SIZE, RAID_UNITS, isAutoFarmList, isRaidableOasis, oasisAnimals,
 } from './rules.js';
@@ -168,28 +169,43 @@ function unsafeReason(tile) {
   return `${oasisAnimals(tile)} animals`;
 }
 
-// Raids with the bot's own farm lists. Right before sending, every target is checked on the map
-// again and only oases that are still unoccupied and animal-free are sent; slots with a raid
-// already under way are left alone, and a village's troops at home are shared across its lists.
-export async function runFarmLists(game) {
+const RAID_STATE = '.auth/raid-state.json';
+
+// Sends one raid wave from the bot's own farm lists ("rainbow" farming on an interval). Every wave
+// (every `waveMinutes`) each list sends its next slice of targets, so every target is raided about
+// once per `cycleMinutes`, whether or not earlier raids are back: the targets raided longest ago go
+// first, nearest first on ties, and a target is not raided twice within one cycle. Troops at home
+// are the only other limit. Right before sending, each target is checked on the map again and only
+// oases that are still unoccupied and animal-free are sent.
+export async function runFarmLists(game, { waveMinutes = 10, cycleMinutes = 60 } = {}) {
   const lists = (await game.farmLists()).filter(isAutoFarmList);
   if (!lists.length) {
     game.log('No "Oases (auto)" farm lists yet; run farm-setup first.');
     return;
   }
+  const lastSent = JSON.parse(await fs.readFile(RAID_STATE, 'utf8').catch(() => '{}'));
+  const villages = new Map((await game.villages()).map((v) => [v.did, v]));
   const tiles = new TileCache(game);
-  const home = new Map();
-  for (const list of lists) {
+  const homes = new Map();
+  const now = Date.now();
+  const fresh = (cycleMinutes - waveMinutes / 2) * 60_000;
+  for (const list of lists.filter((l) => l.slots.length)) {
     const did = list.ownerVillage.id;
-    if (!home.has(did)) home.set(did, { ...(list.ownerVillage.troops?.ownTroopsAtTown?.units ?? {}) });
-    const units = home.get(did);
-    const running = list.slots.filter((s) => s.isRunning).length;
-    const safe = [];
-    let waiting = 0;
+    const owner = villages.get(did);
+    if (!homes.has(did)) homes.set(did, { ...(list.ownerVillage.troops?.ownTroopsAtTown?.units ?? {}) });
+    const home = homes.get(did);
+    const dist = (s) => Math.hypot(s.target.x - owner.x, s.target.y - owner.y);
+    const active = list.slots.filter((s) => s.isActive);
+    const quota = Math.ceil((active.length * waveMinutes) / cycleMinutes);
+    const order = active.filter((s) => now - (lastSent[s.id] ?? 0) >= fresh)
+      .sort((a, b) => (lastSent[a.id] ?? 0) - (lastSent[b.id] ?? 0) || dist(a) - dist(b));
+    const send = [];
     let unsafe = 0;
-    for (const slot of list.slots.filter((s) => s.isActive && !s.isRunning)) {
-      if (!Object.entries(slot.troop).every(([unit, n]) => (units[unit] ?? 0) >= n)) {
-        waiting++;
+    let short = 0;
+    for (const slot of order) {
+      if (send.length >= quota) break;
+      if (!Object.entries(slot.troop).every(([u, n]) => (home[u] ?? 0) >= n)) {
+        short++;
         continue;
       }
       const tile = await tiles.get(slot.target.x, slot.target.y);
@@ -198,17 +214,24 @@ export async function runFarmLists(game) {
         game.log(`${list.ownerVillage.name} "${list.name}": skipping (${slot.target.x}|${slot.target.y}), ${unsafeReason(tile)}.`);
         continue;
       }
-      for (const [unit, n] of Object.entries(slot.troop)) units[unit] -= n;
-      safe.push(slot);
+      for (const [u, n] of Object.entries(slot.troop)) home[u] -= n;
+      send.push(slot);
     }
-    const summary = `${running} under way, ${waiting} waiting for troops${unsafe ? `, ${unsafe} unsafe` : ''}`;
-    if (!safe.length) {
-      game.log(`${list.ownerVillage.name} "${list.name}": nothing to send (${summary}).`);
+    const running = list.slots.filter((s) => s.isRunning).length;
+    const summary = `${running}/${list.slots.length} targets being raided`
+      + `${short ? `, ${short} waiting for troops` : ''}${unsafe ? `, ${unsafe} unsafe` : ''}`;
+    if (!send.length) {
+      game.log(`${list.ownerVillage.name} "${list.name}": nothing to send this wave (${summary}).`);
       continue;
     }
-    const results = await game.startFarmListTargets(list.id, safe.map((s) => s.id));
+    const results = await game.startFarmListTargets(list.id, send.map((s) => s.id));
     const failed = results.filter((r) => r.error);
-    game.log(`${list.ownerVillage.name} "${list.name}": sent ${results.length - failed.length}/${safe.length}`
+    for (const r of results.filter((x) => !x.error)) lastSent[r.id] = now;
+    game.log(`${list.ownerVillage.name} "${list.name}": wave of ${results.length - failed.length}/${send.length}`
       + `${failed.length ? `, not sent: ${[...new Set(failed.map((r) => JSON.stringify(r.error)))].join(', ')}` : ''} (${summary}).`);
+  }
+  if (!game.dryRun) {
+    await fs.mkdir('.auth', { recursive: true });
+    await fs.writeFile(RAID_STATE, JSON.stringify(lastSent));
   }
 }

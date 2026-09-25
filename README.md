@@ -40,7 +40,7 @@ DRY_RUN=true npm run play   # log what would happen without clicking
 Romans can upgrade one resource field and one building at the same time. With Travian Plus, one
 more job fits in the waiting loop. The bot keeps each small village's queue at `BUILD_QUEUE_MAX`
 jobs (default 3; use 2 without Plus). In `--loop` mode it wakes up when the first job finishes, so
-queues don't sit idle, and raids at most every `RAID_EVERY_MINUTES` (default 10).
+queues don't sit idle, and for each raid wave.
 
 Fields go lowest level first. Ties go to the resource you hold the least of, and cropland
 goes first when net crop falls under 10/h. Buildings go least developed first, compared with their
@@ -73,10 +73,13 @@ Queues are kept busy from two sources of resources:
 Each oasis is in one list only. Re-running adds new oases and removes bot targets beyond the
 radius. Your own farm lists are never touched.
 
-`raid` checks every target on the map again right before sending. It sends only slots whose oasis
-is still unoccupied and empty, has no raid under way, and whose troops are at home (shared across
-a village's lists). An oasis with animals again, or one a player has taken, is skipped until it
-qualifies again.
+`raid` sends one wave; in `--loop` mode a wave goes out every `RAID_EVERY_MINUTES` (default 10),
+whether or not earlier raids are back. Each wave, every list sends its next slice of targets, so
+each target is raided about once per `RAID_CYCLE_MINUTES` (default 60). The oldest-raided targets
+go first, and no target is raided twice within one cycle. Troops at home, shared across a
+village's lists, are the only other limit. Every target is checked on the map again right before
+sending, and only oases that are still unoccupied and empty go out. An oasis with animals again,
+or one a player has taken, is skipped until it qualifies again.
 
 ### Defensive troops
 

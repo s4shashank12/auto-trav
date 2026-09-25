@@ -23,6 +23,7 @@ Commands:
 Configuration comes from environment variables (or .env via npm scripts):
   TRAVIAN_SERVER, TRAVIAN_USERNAME, TRAVIAN_PASSWORD
   HEADLESS=false, DRY_RUN=true, BUILD_QUEUE_MAX (3), RAID_RADIUS (45), RAID_EVERY_MINUTES (10),
+  RAID_CYCLE_MINUTES (60),
   TRAIN_EVERY_MINUTES (30), LOOP_MIN_MINUTES (20), LOOP_MAX_MINUTES (40), LOOP_FLOOR_MINUTES (4)`;
 
 const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'play', 'screenshot'];
@@ -79,9 +80,10 @@ async function build(game) {
 }
 
 let lastRaid = 0;
+const raidEvery = Number(env.RAID_EVERY_MINUTES ?? 10);
 async function raid(game) {
-  await runFarmLists(game);
   lastRaid = Date.now();
+  await runFarmLists(game, { waveMinutes: raidEvery, cycleMinutes: Number(env.RAID_CYCLE_MINUTES ?? 60) });
 }
 
 let lastTrain = 0;
@@ -93,7 +95,7 @@ async function train(game) {
 async function play(game) {
   const soonest = await build(game);
   if (Date.now() - lastTrain >= Number(env.TRAIN_EVERY_MINUTES ?? 30) * 60_000) await train(game);
-  if (Date.now() - lastRaid >= Number(env.RAID_EVERY_MINUTES ?? 10) * 60_000) await raid(game);
+  if (Date.now() - lastRaid >= (raidEvery - 0.5) * 60_000) await raid(game);
   return soonest;
 }
 
@@ -155,10 +157,13 @@ async function main() {
         log(`Pass failed: ${err.message}`);
         await game.screenshot('error').then((f) => log(`Screenshot: ${f}`), () => {});
       }
-      // Come back when the first build job finishes so its slot does not sit idle.
+      // Come back when the first build job finishes so its slot does not sit idle, and in time
+      // for the next raid wave.
       let minutes = min + Math.random() * (max - min);
-      if (soonest != null) minutes = Math.min(minutes, soonest / 60 + 0.5 + Math.random() * 1.5);
-      minutes = Math.max(floor, minutes);
+      if (soonest != null) minutes = Math.max(floor, Math.min(minutes, soonest / 60 + 0.5 + Math.random() * 1.5));
+      if (command === 'play' || command === 'raid') {
+        minutes = Math.min(minutes, Math.max(1, raidEvery - (Date.now() - lastRaid) / 60_000));
+      }
       log(`Sleeping ${Math.round(minutes)} min.`);
       await sleep(minutes * 60_000);
     }
