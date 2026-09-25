@@ -34,8 +34,10 @@ DRY_RUN=true npm run play   # log what would happen without clicking
 
 ### Building
 
-Romans can upgrade one resource field and one building at the same time, and the bot fills both
-queues. Fields go lowest level first. Ties go to the resource you hold the least of, and cropland
+Romans can upgrade one resource field and one building at the same time. With Travian Plus, one
+more job fits in the waiting loop. The bot keeps each small village's queue at `BUILD_QUEUE_MAX`
+jobs (default 3; use 2 without Plus). In `--loop` mode it wakes up when the first job finishes, so
+queues don't sit idle, and raids at most every `RAID_EVERY_MINUTES` (default 10). Fields go lowest level first. Ties go to the resource you hold the least of, and cropland
 goes first when net crop falls under 10/h. Buildings go least developed first, compared with their
 max level. Missing buildings are constructed on an empty slot once the game allows them.
 

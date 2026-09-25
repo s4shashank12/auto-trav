@@ -14,13 +14,13 @@ Commands:
   farm-setup         Create/refresh "Oases (auto)" farm lists with empty, unoccupied oases
   raid               Re-check the auto farm lists' oases and start them
   play               build + raid
-  --loop             Repeat build, raid or play every LOOP_MIN..LOOP_MAX minutes
+  --loop             Repeat build, raid or play; wakes early when a build job finishes
   screenshot [path]  Save a screenshot of a game page (default /dorf1.php)
 
 Configuration comes from environment variables (or .env via npm scripts):
   TRAVIAN_SERVER, TRAVIAN_USERNAME, TRAVIAN_PASSWORD
-  HEADLESS=false, DRY_RUN=true, RAID_RADIUS (20), RAID_PER_SLOT (5),
-  LOOP_MIN_MINUTES (20), LOOP_MAX_MINUTES (40)`;
+  HEADLESS=false, DRY_RUN=true, BUILD_QUEUE_MAX (3), RAID_RADIUS (20), RAID_PER_SLOT (5),
+  RAID_EVERY_MINUTES (10), LOOP_MIN_MINUTES (20), LOOP_MAX_MINUTES (40), LOOP_FLOOR_MINUTES (4)`;
 
 const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'play', 'screenshot'];
 const env = process.env;
@@ -62,15 +62,28 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   });
 }
 
+// Develops every small village. Returns seconds until the first queued job finishes, or null.
 async function build(game) {
+  let soonest = null;
   for (const v of (await game.villages()).filter(canDevelop)) {
-    await developVillage(game, v);
+    const queue = await developVillage(game, v, { queueMax: Number(env.BUILD_QUEUE_MAX ?? 3) });
+    for (const q of queue) {
+      if (q.secondsLeft != null && (soonest == null || q.secondsLeft < soonest)) soonest = q.secondsLeft;
+    }
   }
+  return soonest;
+}
+
+let lastRaid = 0;
+async function raid(game) {
+  await runFarmLists(game);
+  lastRaid = Date.now();
 }
 
 async function play(game) {
-  await build(game);
-  await runFarmLists(game);
+  const soonest = await build(game);
+  if (Date.now() - lastRaid >= Number(env.RAID_EVERY_MINUTES ?? 10) * 60_000) await raid(game);
+  return soonest;
 }
 
 async function main() {
@@ -89,6 +102,7 @@ async function main() {
     log,
   });
 
+  // Returns seconds until the next build job finishes, when known, so --loop can wake up for it.
   const run = async () => {
     await game.login();
     if (command === 'villages') {
@@ -96,17 +110,18 @@ async function main() {
         console.log(`${v.name.padEnd(14)} (${v.x}|${v.y})  pop ${String(v.population).padStart(5)}  ${canDevelop(v) ? 'develop' : 'no building'}`);
       }
     } else if (command === 'build') {
-      await build(game);
+      return build(game);
     } else if (command === 'farm-setup') {
       await setupFarmLists(game, await game.villages(), farmOptions);
     } else if (command === 'raid') {
-      await runFarmLists(game);
+      await raid(game);
     } else if (command === 'screenshot') {
       await game.goto(arg ?? '/dorf1.php');
       log(`Screenshot: ${await game.screenshot('page')}`);
     } else {
-      await play(game);
+      return play(game);
     }
+    return null;
   };
 
   await game.start();
@@ -117,15 +132,20 @@ async function main() {
     }
     const min = Number(env.LOOP_MIN_MINUTES ?? 20);
     const max = Number(env.LOOP_MAX_MINUTES ?? 40);
+    const floor = Number(env.LOOP_FLOOR_MINUTES ?? 4);
     for (;;) {
+      let soonest = null;
       try {
-        await withLock(run);
+        soonest = await withLock(run);
       } catch (err) {
         if (err instanceof CaptchaError) throw err;
         log(`Pass failed: ${err.message}`);
         await game.screenshot('error').then((f) => log(`Screenshot: ${f}`), () => {});
       }
-      const minutes = min + Math.random() * (max - min);
+      // Come back when the first build job finishes so its slot does not sit idle.
+      let minutes = min + Math.random() * (max - min);
+      if (soonest != null) minutes = Math.min(minutes, soonest / 60 + 0.5 + Math.random() * 1.5);
+      minutes = Math.max(floor, minutes);
       log(`Sleeping ${Math.round(minutes)} min.`);
       await sleep(minutes * 60_000);
     }

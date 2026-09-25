@@ -45,49 +45,76 @@ export function pickBuildings(slots, fields) {
   return jobs.sort((a, b) => (b.canBuild - a.canBuild) || (a.progress - b.progress) || (a.rank - b.rank));
 }
 
-// Maxes resource fields and important buildings in a village under the population limit.
-export async function developVillage(game, village) {
+// Each returns a description of the queued job, or null when nothing could be queued.
+async function queueField(game, village, status) {
+  const field = pickField(status);
+  if (!field) return null;
+  game.log(`${village.name}: ${field.type} field (slot ${field.id}) ${field.level} -> ${field.level + 1}`);
+  if (await game.upgrade(field.id, village.did)) return { field };
+  game.log(`${village.name}: not enough resources for that field yet.`);
+  return null;
+}
+
+async function queueBuilding(game, village, status) {
+  const queued = status.queue.map((q) => q.name ?? '');
+  const jobs = pickBuildings(await game.buildings(), status.fields)
+    .filter((job) => !queued.some((name) => name.startsWith(`${job.name} Level`)));
+  for (const job of jobs.slice(0, 3)) {
+    const done = job.kind === 'construct'
+      ? await game.construct(job.slotId, job.gid, CATEGORY[job.gid] ?? 1, village.did)
+      : await game.upgrade(job.slotId, village.did);
+    if (done) {
+      game.log(`${village.name}: ${job.kind} ${job.name} (slot ${job.slotId}).`);
+      return { name: job.name };
+    }
+    game.log(`${village.name}: cannot ${job.kind} ${job.name} yet.`);
+  }
+  return null;
+}
+
+// Maxes resource fields and important buildings in a village under the population limit, filling
+// the build queue up to `queueMax` jobs (3 for Romans with Travian Plus: one field and one building
+// running, plus one in the waiting loop). Returns the village's queue afterwards.
+export async function developVillage(game, village, { queueMax = 3 } = {}) {
   await game.switchVillage(village.did);
-  const status = await game.status();
+  let status = await game.status();
   game.log(formatStatus(status));
-  // Re-check on the village's own page before touching anything.
   if (status.did !== village.did) {
     game.log(`Skipping ${village.name}: another village is active.`);
-    return;
+    return [];
   }
   if (!canDevelop({ population: status.population })) {
     game.log(`Skipping ${village.name}: population ${status.population} is not under the limit.`);
-    return;
+    return status.queue;
   }
 
-  // Romans run one field and one building job at a time; other tribes share a single queue.
-  const fieldBusy = status.roman ? status.queue.some((q) => q.isField) : status.queue.length > 0;
-  const buildingBusy = status.roman ? status.queue.some((q) => !q.isField) : status.queue.length > 0;
-
-  let queuedField = false;
-  if (!fieldBusy) {
-    const field = pickField(status);
-    if (field) {
-      game.log(`${village.name}: ${field.type} field (slot ${field.id}) ${field.level} -> ${field.level + 1}`);
-      queuedField = await game.upgrade(field.id, village.did);
-      if (!queuedField) game.log(`${village.name}: not enough resources for that field yet.`);
+  // Romans build a field and a building side by side, so one type may hold at most queueMax - 1 jobs.
+  const perType = status.roman ? queueMax - 1 : queueMax;
+  const exhausted = new Set();
+  for (let attempt = 0; attempt < queueMax + 2 && status.queue.length < queueMax; attempt++) {
+    const fieldJobs = status.queue.filter((q) => q.isField).length;
+    const buildingJobs = status.queue.length - fieldJobs;
+    const canField = !exhausted.has('field') && fieldJobs < perType;
+    const canBuilding = !exhausted.has('building') && buildingJobs < perType;
+    if (!canField && !canBuilding) break;
+    const kind = canField && (!canBuilding || fieldJobs <= buildingJobs) ? 'field' : 'building';
+    const queued = kind === 'field' ? await queueField(game, village, status) : await queueBuilding(game, village, status);
+    if (!queued) {
+      exhausted.add(kind);
+      continue;
     }
-  }
-
-  if (!buildingBusy && (status.roman || !queuedField)) {
-    const jobs = pickBuildings(await game.buildings(), status.fields);
-    for (const job of jobs.slice(0, 3)) {
-      const { name } = job;
-      const done = job.kind === 'construct'
-        ? await game.construct(job.slotId, job.gid, CATEGORY[job.gid] ?? 1, village.did)
-        : await game.upgrade(job.slotId, village.did);
-      if (done) {
-        game.log(`${village.name}: ${job.kind} ${name} (slot ${job.slotId}).`);
-        break;
-      }
-      game.log(`${village.name}: cannot ${job.kind} ${name} yet.`);
+    if (game.dryRun) {
+      // Nothing was clicked, so pretend the job went in rather than re-reading an unchanged queue.
+      if (queued.field) queued.field.underConstruction = true;
+      status.queue.push({ name: `${queued.name ?? queued.field.type} Level ?`, isField: kind === 'field', secondsLeft: null });
+      continue;
     }
+    const before = status.queue.length;
+    status = await game.status();
+    if (status.did !== village.did) break;
+    if (status.queue.length <= before) exhausted.add(kind); // the game did not take the order
   }
+  return status.queue;
 }
 
 // Raidable oases around every village, each assigned to the nearest village that can raid it.
