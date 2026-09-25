@@ -35,3 +35,26 @@ export function isRaidableOasis(tile) {
 // Farm lists the bot owns start with this name. Lists with any other name are never started or edited.
 export const AUTO_FARM_LIST_PREFIX = 'Oases (auto)';
 export const isAutoFarmList = (list) => list.name.startsWith(AUTO_FARM_LIST_PREFIX);
+
+// Units the bot farms with, slowest first: slow infantry takes the nearest oases and fast
+// cavalry the far ones ("rainbow" farming). Praetorians and scouts never farm.
+// `short` names new farm lists, which the game caps at 30 characters.
+export const RAID_UNITS = {
+  t1: { name: 'Legionnaires', short: 'Legionnaires', speed: 6, perSlot: 10 },
+  t3: { name: 'Imperians', short: 'Imperians', speed: 7, perSlot: 10 },
+  t6: { name: 'Equites Caesaris', short: 'EC', speed: 10, perSlot: 5 },
+  t5: { name: 'Equites Imperatoris', short: 'EI', speed: 14, perSlot: 5 },
+};
+export const FARM_LIST_SIZE = 100;
+
+// Defensive units trained to keep military buildings busy, by building gid: Praetorians in the
+// barracks, Equites Caesaris in the stable. Workshops (rams, catapults) are left alone.
+export const DEFENSIVE_UNITS = { 19: 't2', 20: 't6' };
+
+// Villages whose net crop drops under CROP_LOW stop training and send defensive troops to the
+// capital as reinforcements until they are back to CROP_TARGET. The capital only takes them while
+// its own net crop stays above CAPITAL_CROP_MIN.
+export const REINFORCE_TARGET = 'Chingdi';
+export const CROP_LOW = 200;
+export const CROP_TARGET = 600;
+export const CAPITAL_CROP_MIN = 2000;

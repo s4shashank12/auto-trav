@@ -18,16 +18,19 @@ All rules live in [`src/rules.js`](src/rules.js).
   village's own page before every build.
 - **Attacks:** only raids on unoccupied oases that have no animals, and only through farm lists
   named `Oases (auto) …`. Other farm lists and "Start all farm lists" are never used.
+- **Troops:** the big villages' barracks and stables train defensive units only. Villages short
+  on crop send defensive troops to Chingdi as reinforcements.
 
 ## Commands
 
 ```bash
 npm run villages     # villages, population and whether the bot may build there
 npm run build        # one pass over the small villages
-npm run farm-setup   # create/refresh the "Oases (auto) near/far" farm lists
+npm run farm-setup   # fill the "Oases (auto)" farm lists (100 per list, per unit type)
 npm run raid         # re-check the oases on the map and start the farm lists
-npm run play         # build + raid
-npm run loop         # build + raid every 20-40 minutes until stopped
+npm run train        # keep barracks and stables training defensive troops
+npm run play         # build + train + raid
+npm run loop         # keep playing until stopped
 npm run screenshot -- /build.php?id=39&gid=16&tt=99
 DRY_RUN=true npm run play   # log what would happen without clicking
 ```
@@ -52,26 +55,38 @@ Queues are kept busy from two sources of resources:
   page. That opens the game's own "transfer from hero" dialog, pre-filled with exactly the
   shortfall. The bot confirms it, then builds. It never uses gold (NPC exchange, master builder).
 
-### Raiding
+### Raiding ("rainbow" farming)
 
 `farm-setup` does the following:
 
-1. Finds the villages with cavalry (Equites Imperatoris `t5` or Equites Caesaris `t6`).
-2. Scans the map around each one for unoccupied oases with no animals, within `RAID_RADIUS`
-   (default 20).
-3. Gives each oasis to the nearest village.
-4. Fills two lists per village:
-   - `Oases (auto) near`: under 10 fields, fast `t5` first.
-   - `Oases (auto) far`: `t6` first.
+1. Works out how many more slots each village's raiding units can cover. Raiding units are
+   Legionnaires, Imperians, Equites Caesaris and Equites Imperatoris; Praetorians and scouts never
+   farm. The count uses troops at home plus those out on raids.
+2. Scans the map for unoccupied oases with no animals within `RAID_RADIUS` fields (default 45) of
+   those villages.
+3. Gives each oasis to the nearest village with room.
+4. Splits each village's oases between its unit types by distance: slow infantry takes the
+   nearest band and fast cavalry the farthest.
+5. Files them into lists named `Oases (auto) <unit>`, up to 100 targets each, adding lists as
+   needed.
 
-   Each oasis gets up to `RAID_PER_SLOT` units (default 5), split so the village's cavalry covers
-   every target. Re-running only adds oases that are not on a list yet.
+Each oasis is in one list only. Re-running adds new oases and removes bot targets beyond the
+radius. Your own farm lists are never touched.
 
-`raid` only ticks as many slots as the cavalry at home can fill. It looks up every target on the
-map again. It ticks only the slots whose oasis is still
-unoccupied and empty and has no raid already under way. Then it presses Start, which sends only
-the ticked slots. An oasis with animals again, or one a player has taken, is skipped until it
+`raid` checks every target on the map again right before sending. It sends only slots whose oasis
+is still unoccupied and empty, has no raid under way, and whose troops are at home (shared across
+a village's lists). An oasis with animals again, or one a player has taken, is skipped until it
 qualifies again.
+
+### Defensive troops
+
+`train` keeps the barracks (Praetorians) and stables (Equites Caesaris, where researched) of the
+big villages training. It tops a queue up to 3 hours whenever less than 1 hour is left, using only
+resources above 5,000 of each. Small villages keep their resources for building. Training stops
+once a village's net crop would drop under 200/h. At that point the village sends enough
+Praetorians (then Equites Caesaris) to Chingdi as reinforcements to get back to 600/h, so their
+upkeep moves to the capital. That happens only while Chingdi keeps at least 2,000/h, and not
+again until the previous reinforcement has arrived. Tune these in `src/rules.js`.
 
 ## Setup
 

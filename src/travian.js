@@ -116,17 +116,17 @@ export class Travian {
   }
 
   // Calls the same JSON endpoints the game's own pages use, with the logged-in session.
-  async api(pathname, body) {
-    const res = await this.page.evaluate(async ([url, payload]) => {
+  async api(pathname, body, method = 'POST') {
+    const res = await this.page.evaluate(async ([url, payload, verb]) => {
       const r = await fetch(url, {
-        method: 'POST',
+        method: verb,
         headers: { 'content-type': 'application/json; charset=UTF-8' },
         body: JSON.stringify(payload),
       });
       return { status: r.status, text: await r.text() };
-    }, [pathname, body]);
-    if (res.status !== 200) throw new Error(`${pathname} returned ${res.status}: ${res.text.slice(0, 200)}`);
-    return JSON.parse(res.text);
+    }, [pathname, body, method]);
+    if (res.status < 200 || res.status > 299) throw new Error(`${pathname} returned ${res.status}: ${res.text.slice(0, 200)}`);
+    return res.text ? JSON.parse(res.text) : null;
   }
 
   async graphql(query, variables = {}) {
@@ -365,6 +365,122 @@ export class Travian {
     return response.ok();
   }
 
+  // Own troops at home in every village, keyed by village id.
+  async villageTroops() {
+    const data = await this.graphql(`{ownPlayer{villages{id troops{ownTroopsAtTown{units{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}}}`);
+    return new Map(data.ownPlayer.villages.map((v) => [v.id, v.troops?.ownTroopsAtTown?.units ?? {}]));
+  }
+
+  // Training page of military building `gid` in village `did`: stock, net production, the queue's
+  // remaining seconds and, for `unit`, its cost, upkeep, seconds per unit and the game's max.
+  // Returns null when the village has no such building or cannot train the unit.
+  async trainingInfo(did, gid, unit) {
+    await this.goto(`/build.php?newdid=${did}&gid=${gid}`);
+    const info = await this.page.evaluate((unitId) => {
+      const block = document.querySelector(`.trainUnits .innerTroopWrapper[data-troopid="${unitId}"]`);
+      const values = [...(block?.querySelectorAll('.resourceWrapper .value') ?? [])].map((e) => e.textContent);
+      const js = typeof window.resources === 'object' ? window.resources : null;
+      return {
+        active: document.querySelector('.villageInput')?.dataset.did ?? null,
+        hasForm: Boolean(document.querySelector('.trainUnits')),
+        block: Boolean(block?.querySelector(`input[name="${unitId}"]`)),
+        cost: values.slice(0, 4),
+        upkeep: values[4] ?? null,
+        duration: block?.querySelector('.inlineIcon.duration .value')?.textContent ?? null,
+        max: block?.querySelector('.cta a')?.textContent ?? null,
+        queue: [...document.querySelectorAll('table.under_progress td.dur .timer')].map((t) => t.getAttribute('value')),
+        stock: js?.storage ?? null,
+        production: js?.production ?? null,
+      };
+    }, unit);
+    if (toInt(info.active) !== did) throw new Error(`Expected village ${did} to be active, got ${info.active}`);
+    if (!info.hasForm || !info.block) return null;
+    const seconds = (t) => (t ?? '0:0:0').split(':').map(Number).reduce((a, b) => a * 60 + b, 0);
+    const res = (o) => ({ wood: toInt(o?.l1), clay: toInt(o?.l2), iron: toInt(o?.l3), crop: toInt(o?.l4) });
+    const [wood, clay, iron, crop] = info.cost.map(toInt);
+    return {
+      cost: { wood, clay, iron, crop },
+      upkeep: toInt(info.upkeep) ?? 1,
+      unitSeconds: seconds(info.duration),
+      max: toInt(info.max) ?? 0,
+      queueSeconds: Math.max(0, ...info.queue.map(toInt)),
+      stock: res(info.stock),
+      production: res(info.production),
+    };
+  }
+
+  // Trains `amount` of `unit` on the training page opened by trainingInfo().
+  async train(did, unit, amount) {
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to train: village ${active} is active, expected ${did}`);
+    if (this.dryRun) {
+      this.log(`[dry run] would train ${amount} ${unit}`);
+      return true;
+    }
+    await this.page.locator(`.trainUnits .innerTroopWrapper[data-troopid="${unit}"] input[name="${unit}"]`).fill(String(amount));
+    await this.pause(400, 900);
+    await Promise.all([
+      this.page.waitForLoadState('domcontentloaded'),
+      this.page.locator('#content button.startTraining').first().click(),
+    ]);
+    await this.pause();
+    return true;
+  }
+
+  // Sends `troops` from village `did` as reinforcement to (x|y). The confirmation page must say
+  // "Reinforcement" before it is confirmed. Returns the arrival time in ms, or null.
+  async sendReinforcement(did, { x, y }, troops) {
+    await this.goto(`/build.php?newdid=${did}&id=${RALLY_POINT}&gid=16&tt=2`);
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to send troops: village ${active} is active, expected ${did}`);
+    for (const [unit, n] of Object.entries(troops)) await this.page.fill(`input[name="troop[${unit}]"]`, String(n));
+    await this.page.fill('input[name="x"]', String(x));
+    await this.page.fill('input[name="y"]', String(y));
+    await this.page.check('input[name="eventType"][value="5"]');
+    await this.pause(400, 900);
+    await Promise.all([this.page.waitForLoadState('domcontentloaded'), this.page.click('button[name="ok"]')]);
+    await this.pause();
+    const headline = (await this.page.locator('table.troop_details .troopHeadline').first().innerText().catch(() => '')).trim();
+    if (!/^Reinforcement/i.test(headline)) throw new Error(`Refusing to confirm troops: the order reads "${headline}"`);
+    const arrivalText = await this.page.locator('#content').innerText();
+    const m = arrivalText.match(/In (\d+):(\d+):(\d+) hours/);
+    const arrival = Date.now() + (m ? ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000 : 0);
+    if (this.dryRun) {
+      this.log(`[dry run] would confirm "${headline}"`);
+      return arrival;
+    }
+    await Promise.all([this.page.waitForLoadState('domcontentloaded'), this.page.click('#confirmSendTroops')]);
+    await this.pause();
+    return arrival;
+  }
+
+  // Deletes farm list slots with the request the list's "Delete" menu entry sends.
+  async deleteFarmListSlots(slotIds) {
+    if (!slotIds.length) return;
+    if (this.dryRun) {
+      this.log(`[dry run] would delete ${slotIds.length} farm list targets`);
+      return;
+    }
+    await this.api('/api/v1/farm-list/slot', { slots: slotIds, abandoned: false }, 'DELETE');
+    await this.pause();
+  }
+
+  // Adds targets to a farm list with the same request the "Add target" dialog sends, in batches.
+  async addFarmListSlots(listId, targets, troops) {
+    const units = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`t${i + 1}`, troops[`t${i + 1}`] ?? 0]));
+    for (let i = 0; i < targets.length; i += 20) {
+      const batch = targets.slice(i, i + 20);
+      if (this.dryRun) {
+        this.log(`[dry run] would add ${batch.length} targets to farm list ${listId}`);
+        continue;
+      }
+      await this.api('/api/v1/farm-list/slot', {
+        slots: batch.map((t) => ({ listId, x: t.x, y: t.y, units, active: true, abandoned: false })),
+      });
+      await this.pause(1000, 2500);
+    }
+  }
+
   // Map tiles in a 31x31 area centred on (x, y), as the game's map loads them.
   async mapTiles(x, y) {
     const res = await this.api('/api/v1/map/position', { data: { x, y, zoomLevel: 3, ignorePositions: [] } });
@@ -386,7 +502,7 @@ export class Travian {
   async farmLists() {
     const data = await this.graphql(`{ownPlayer{farmLists{id name
       ownerVillage{id name troops{ownTroopsAtTown{units{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}
-      slots{id isActive target{x y} troop{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}}`);
+      slots{id isActive isRunning target{x y} troop{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}}`);
     return data.ownPlayer.farmLists;
   }
 
@@ -407,6 +523,7 @@ export class Travian {
 
   // Creates a farm list owned by village `did` and returns its id.
   async createFarmList({ did, villageName, name, troops }) {
+    if (name.length > 30) throw new Error(`Farm list name "${name}" is longer than the game's 30 characters`);
     await this.openFarmLists(did);
     await this.page.locator('button.createFarmList').first().click();
     const dlg = this.dialog();
@@ -449,48 +566,17 @@ export class Travian {
     await this.pause(500, 1200);
   }
 
-  // Slot ids of a farm list that have a raid under way. The farm list page must be open.
-  async runningSlots(listId) {
-    const ids = await this.farmListWrapper(listId).evaluate((w) => [...w.querySelectorAll('tr.slot')]
-      .filter((tr) => tr.querySelector('td.state i[class*="attack"]'))
-      .map((tr) => tr.querySelector('input[name="selectOne"]')?.dataset.slotId));
-    return new Set(ids.map(Number));
-  }
-
-  farmListWrapper(listId) {
-    return this.page.locator('.farmListWrapper').filter({ has: this.page.locator(`[data-list="${listId}"]`) });
-  }
-
-  // Ticks exactly `slotIds` in one farm list and presses its Start button, which then sends only the
-  // ticked targets. Never presses Start with nothing ticked (that would send the whole list) and
-  // never uses "Start all farm lists". Returns the game's per-target results.
+  // Starts exactly `slotIds` of farm list `listId`, with the request its Start button sends when
+  // those slots are ticked. Returns the game's per-target results.
   async startFarmListTargets(listId, slotIds) {
     if (!slotIds.length) return [];
-    const wrapper = this.farmListWrapper(listId);
-    await this.dismissCookieBanner();
-    for (const id of slotIds) {
-      const box = wrapper.locator(`input[name="selectOne"][data-slot-id="${id}"]`);
-      // A DOM click, so fixed overlays (cookie banner, footer) cannot swallow it.
-      if (!(await box.isChecked())) await box.evaluate((el) => el.click());
-      if (!(await box.isChecked())) throw new Error(`Farm list ${listId}: could not tick slot ${id}; not starting`);
-      await this.pause(150, 400);
-    }
-    const button = wrapper.locator('.farmListHeader button.startFarmList');
-    const label = (await button.innerText()).replace(/\s+/g, ' ').trim();
-    if (label !== `Start (${slotIds.length})`) {
-      throw new Error(`Farm list ${listId}: expected "Start (${slotIds.length})" but the button says "${label}"; not starting`);
-    }
     if (this.dryRun) {
-      this.log(`[dry run] would press "${label}" on farm list ${listId}`);
+      this.log(`[dry run] would start ${slotIds.length} targets of farm list ${listId}`);
       return slotIds.map((id) => ({ id, error: null }));
     }
-    const [response] = await Promise.all([
-      this.page.waitForResponse((r) => r.url().includes('/api/v1/farm-list/send'), { timeout: 15_000 }),
-      button.click(),
-    ]);
-    const body = await response.json().catch(() => ({}));
+    const res = await this.api('/api/v1/farm-list/send', { action: 'farmList', lists: [{ id: listId, targets: slotIds }] });
     await this.pause();
-    return body.lists?.find((l) => l.id === listId)?.targets ?? [];
+    return res?.lists?.find((l) => l.id === listId)?.targets ?? [];
   }
 }
 

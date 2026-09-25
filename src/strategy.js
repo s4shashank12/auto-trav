@@ -1,6 +1,4 @@
-import {
-  AUTO_FARM_LIST_PREFIX, IMPORTANT_BUILDINGS, canDevelop, isAutoFarmList, isRaidableOasis, oasisAnimals,
-} from './rules.js';
+import { IMPORTANT_BUILDINGS, canDevelop } from './rules.js';
 import { formatStatus } from './travian.js';
 
 // Empty building slots the bot may construct on (39 is the rally point, 40 the wall).
@@ -49,8 +47,11 @@ const RESOURCES = ['wood', 'clay', 'iron', 'crop'];
 
 // Tops up a small village from the nearest big village with a surplus, so its build queue does
 // not wait on resources. Triggers when any resource is under `low` of storage and fills towards
-// `fill`, counting merchants already on the way. Sources keep `reserve` of each resource.
-export async function supplyVillage(game, village, status, villages, { low = 0.3, fill = 0.7, reserve = 20_000 } = {}) {
+// `fill` (at most `fillMax`), counting merchants already on the way. Sources keep `reserve` of
+// each resource; this runs before troop training, so small villages come first.
+export async function supplyVillage(game, village, status, villages, {
+  low = 0.3, fill = 0.7, fillMax = 15_000, reserve = 5_000,
+} = {}) {
   const cap = status.maxStorage;
   if (!RESOURCES.some((r) => status.stock[r] < low * cap[r])) return false;
   const economy = await game.economy();
@@ -60,7 +61,8 @@ export async function supplyVillage(game, village, status, villages, { low = 0.3
       for (const r of RESOURCES) incoming[r] += move.resources[r];
     }
   }
-  const want = Object.fromEntries(RESOURCES.map((r) => [r, Math.max(0, Math.floor(fill * cap[r] - status.stock[r] - incoming[r]))]));
+  const want = Object.fromEntries(RESOURCES.map((r) => [r,
+    Math.max(0, Math.floor(Math.min(fill * cap[r], fillMax) - status.stock[r] - incoming[r]))]));
   if (RESOURCES.every((r) => status.stock[r] + incoming[r] >= low * cap[r])) return false;
 
   const dist = (v) => Math.hypot(v.x - village.x, v.y - village.y);
@@ -155,147 +157,4 @@ export async function developVillage(game, village, { queueMax = 3, villages = [
     if (status.queue.length <= before) exhausted.add(kind); // the game did not take the order
   }
   return status.queue;
-}
-
-// Raidable oases around every village, each assigned to the nearest village that can raid it.
-export async function scanOases(game, raiders, radius) {
-  const found = new Map();
-  for (const v of raiders) {
-    const tiles = await game.mapTiles(v.x, v.y);
-    for (const tile of tiles.values()) {
-      if (!isRaidableOasis(tile)) continue;
-      const { x, y } = tile.position;
-      const dist = Math.hypot(x - v.x, y - v.y);
-      if (dist > radius) continue;
-      const key = `${x}|${y}`;
-      if (!found.has(key) || found.get(key).dist > dist) found.set(key, { x, y, dist, did: v.did });
-    }
-    await game.pause(400, 1000);
-  }
-  return [...found.values()].sort((a, b) => a.dist - b.dist);
-}
-
-// Distance bands, one farm list each, so near oases can be raided more often than far ones.
-// Units are tried in order: fast light cavalry for near targets, heavy cavalry for far ones.
-export const FARM_BANDS = [
-  { suffix: 'near', maxDist: 10, units: ['t5', 't6'] },
-  { suffix: 'far', maxDist: Infinity, units: ['t6', 't5'] },
-];
-
-// Splits a village's cavalry across its bands: each target gets up to `perSlot` units, at least 2.
-export function planFarmLists(targets, troops, perSlot) {
-  const budget = { ...troops };
-  const plans = [];
-  let minDist = 0;
-  for (const band of FARM_BANDS) {
-    const inBand = targets.filter((o) => o.dist >= minDist && o.dist < band.maxDist);
-    minDist = band.maxDist;
-    if (!inBand.length) continue;
-    const unit = band.units.find((u) => (budget[u] ?? 0) >= inBand.length * 2);
-    if (!unit) continue;
-    const amount = Math.min(perSlot, Math.floor(budget[unit] / inBand.length));
-    budget[unit] -= amount * inBand.length;
-    plans.push({ name: `${AUTO_FARM_LIST_PREFIX} ${band.suffix}`, targets: inBand, troops: { [unit]: amount } });
-  }
-  return plans;
-}
-
-// Creates "Oases (auto) near/far" farm lists for each village with cavalry and fills them with the
-// empty, unoccupied oases nearest to it. Safe to re-run: existing targets are not added twice.
-export async function setupFarmLists(game, villages, { radius = 20, perSlot = 5 } = {}) {
-  const raiders = [];
-  for (const v of villages) {
-    await game.switchVillage(v.did);
-    const troops = await game.troopsAtHome();
-    if ((troops.t5 ?? 0) + (troops.t6 ?? 0) > 0) raiders.push({ ...v, troops });
-  }
-  game.log(`Villages with cavalry: ${raiders.map((v) => `${v.name} (t5 ${v.troops.t5 ?? 0}, t6 ${v.troops.t6 ?? 0})`).join(', ') || 'none'}`);
-  const oases = await scanOases(game, raiders, radius);
-  game.log(`Found ${oases.length} empty unoccupied oases within ${radius} fields.`);
-  let lists = await game.farmLists();
-
-  for (const v of raiders) {
-    const plans = planFarmLists(oases.filter((o) => o.did === v.did), v.troops, perSlot);
-    for (const plan of plans) {
-      let list = lists.find((l) => l.name === plan.name && l.ownerVillage.id === v.did);
-      if (!list) {
-        const id = await game.createFarmList({ did: v.did, villageName: v.name, name: plan.name, troops: plan.troops });
-        if (!id) continue;
-        lists = await game.farmLists();
-        list = lists.find((l) => l.id === id);
-      }
-      await game.openFarmLists(v.did);
-      const existing = new Set(list.slots.map((s) => `${s.target.x}|${s.target.y}`));
-      const toAdd = plan.targets.filter((o) => !existing.has(`${o.x}|${o.y}`));
-      const [unit, amount] = Object.entries(plan.troops)[0];
-      game.log(`${v.name}: adding ${toAdd.length} oases to "${plan.name}" with ${amount}x ${unit} each.`);
-      for (const o of toAdd) {
-        await game.addFarmListTarget(list.id, o, plan.troops);
-        game.log(`  + (${o.x}|${o.y}) ${o.dist.toFixed(1)} fields away`);
-      }
-    }
-  }
-}
-
-// Map tiles fetched in 31x31 windows, reusing a window for every target it covers.
-class TileCache {
-  constructor(game) {
-    this.game = game;
-    this.windows = [];
-  }
-
-  async get(x, y) {
-    let win = this.windows.find((w) => Math.abs(w.x - x) <= 14 && Math.abs(w.y - y) <= 14);
-    if (!win) {
-      win = { x, y, tiles: await this.game.mapTiles(x, y) };
-      this.windows.push(win);
-    }
-    return win.tiles.get(`${x}|${y}`);
-  }
-}
-
-function unsafeReason(tile) {
-  if (!tile) return 'not on the map';
-  if (tile.title !== '{k.fo}' || tile.uid != null) return 'no longer an unoccupied oasis';
-  return `${oasisAnimals(tile)} animals`;
-}
-
-// Raids with the bot's own farm lists. Right before sending, every target is checked on the map
-// again and only oases that are still unoccupied and animal-free are sent; slots with a raid
-// already under way are left alone.
-export async function runFarmLists(game) {
-  const lists = (await game.farmLists()).filter(isAutoFarmList);
-  if (!lists.length) {
-    game.log('No "Oases (auto)" farm lists yet; run farm-setup first.');
-    return;
-  }
-  const tiles = new TileCache(game);
-  for (const list of lists) {
-    await game.openFarmLists(list.ownerVillage.id);
-    const running = await game.runningSlots(list.id);
-    // Troops still riding home are neither "under way" nor at home, so only tick what fits.
-    const home = { ...(list.ownerVillage.troops?.ownTroopsAtTown?.units ?? {}) };
-    const safe = [];
-    let waiting = 0;
-    for (const slot of list.slots.filter((s) => s.isActive && !running.has(s.id))) {
-      const tile = await tiles.get(slot.target.x, slot.target.y);
-      if (!isRaidableOasis(tile)) {
-        game.log(`${list.ownerVillage.name} "${list.name}": skipping (${slot.target.x}|${slot.target.y}), ${unsafeReason(tile)}.`);
-      } else if (Object.entries(slot.troop).every(([unit, n]) => (home[unit] ?? 0) >= n)) {
-        for (const [unit, n] of Object.entries(slot.troop)) home[unit] -= n;
-        safe.push(slot);
-      } else {
-        waiting++;
-      }
-    }
-    if (!safe.length) {
-      game.log(`${list.ownerVillage.name} "${list.name}": nothing to send (${running.size} under way, ${waiting} waiting for troops).`);
-      continue;
-    }
-    const results = await game.startFarmListTargets(list.id, safe.map((s) => s.id));
-    const failed = results.filter((r) => r.error);
-    game.log(`${list.ownerVillage.name} "${list.name}": sent ${results.length - failed.length}/${safe.length}`
-      + `${failed.length ? `, not sent: ${[...new Set(failed.map((r) => JSON.stringify(r.error)))].join(', ')}` : ''}`
-      + ` (${running.size} already under way).`);
-  }
 }

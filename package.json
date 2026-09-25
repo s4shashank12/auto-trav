@@ -12,6 +12,7 @@
     "build": "node --env-file-if-exists=.env src/cli.js build",
     "farm-setup": "node --env-file-if-exists=.env src/cli.js farm-setup",
     "raid": "node --env-file-if-exists=.env src/cli.js raid",
+    "train": "node --env-file-if-exists=.env src/cli.js train",
     "play": "node --env-file-if-exists=.env src/cli.js play",
     "loop": "node --env-file-if-exists=.env src/cli.js play --loop",
     "screenshot": "node --env-file-if-exists=.env src/cli.js screenshot"

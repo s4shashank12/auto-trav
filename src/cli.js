@@ -3,7 +3,9 @@ import { rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { canDevelop, POPULATION_LIMIT } from './rules.js';
-import { developVillage, runFarmLists, setupFarmLists } from './strategy.js';
+import { runFarmLists, setupFarmLists } from './farming.js';
+import { trainDefense } from './military.js';
+import { developVillage } from './strategy.js';
 import { CaptchaError, Travian } from './travian.js';
 
 const USAGE = `Usage: auto-travian <command>
@@ -11,22 +13,23 @@ const USAGE = `Usage: auto-travian <command>
 Commands:
   villages           List villages, population and whether the bot may build there
   build              Max resource fields and economy buildings in villages under ${POPULATION_LIMIT} population
-  farm-setup         Create/refresh "Oases (auto)" farm lists with empty, unoccupied oases
+  farm-setup         Fill "Oases (auto)" farm lists (100 per list, one set per unit type)
   raid               Re-check the auto farm lists' oases and start them
-  play               build + raid
+  train              Keep barracks/stables in big villages training defensive troops
+  play               build + train + raid
   --loop             Repeat build, raid or play; wakes early when a build job finishes
   screenshot [path]  Save a screenshot of a game page (default /dorf1.php)
 
 Configuration comes from environment variables (or .env via npm scripts):
   TRAVIAN_SERVER, TRAVIAN_USERNAME, TRAVIAN_PASSWORD
-  HEADLESS=false, DRY_RUN=true, BUILD_QUEUE_MAX (3), RAID_RADIUS (20), RAID_PER_SLOT (5),
-  RAID_EVERY_MINUTES (10), LOOP_MIN_MINUTES (20), LOOP_MAX_MINUTES (40), LOOP_FLOOR_MINUTES (4)`;
+  HEADLESS=false, DRY_RUN=true, BUILD_QUEUE_MAX (3), RAID_RADIUS (45), RAID_EVERY_MINUTES (10),
+  TRAIN_EVERY_MINUTES (30), LOOP_MIN_MINUTES (20), LOOP_MAX_MINUTES (40), LOOP_FLOOR_MINUTES (4)`;
 
-const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'play', 'screenshot'];
+const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'play', 'screenshot'];
 const env = process.env;
 const flag = (v) => /^(1|true|yes)$/i.test(v ?? '');
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
-const farmOptions = { radius: Number(env.RAID_RADIUS ?? 20), perSlot: Number(env.RAID_PER_SLOT ?? 5) };
+const farmOptions = { radius: Number(env.RAID_RADIUS ?? 45) };
 const LOCK_FILE = '.auth/bot.lock';
 
 // Several runs can share one account, but the game keeps a single "active village" per session, so
@@ -81,8 +84,15 @@ async function raid(game) {
   lastRaid = Date.now();
 }
 
+let lastTrain = 0;
+async function train(game) {
+  await trainDefense(game, await game.villages());
+  lastTrain = Date.now();
+}
+
 async function play(game) {
   const soonest = await build(game);
+  if (Date.now() - lastTrain >= Number(env.TRAIN_EVERY_MINUTES ?? 30) * 60_000) await train(game);
   if (Date.now() - lastRaid >= Number(env.RAID_EVERY_MINUTES ?? 10) * 60_000) await raid(game);
   return soonest;
 }
@@ -116,6 +126,8 @@ async function main() {
       await setupFarmLists(game, await game.villages(), farmOptions);
     } else if (command === 'raid') {
       await raid(game);
+    } else if (command === 'train') {
+      await train(game);
     } else if (command === 'screenshot') {
       await game.goto(arg ?? '/dorf1.php');
       log(`Screenshot: ${await game.screenshot('page')}`);
