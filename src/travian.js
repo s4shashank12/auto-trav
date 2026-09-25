@@ -240,17 +240,61 @@ export class Travian {
 
   // Opens a slot and presses the green upgrade button. Returns false if it cannot be built now.
   // Only the plain green button is used, never gold (paid) or video-bonus buttons.
+  // If resources are short, the missing part is first transferred from the hero's inventory.
   async upgrade(slotId, did) {
-    await this.goto(`/build.php?id=${slotId}`);
-    const button = this.page.locator('.upgradeButtonsContainer .section1 button.green.build:not(.disabled)').first();
-    return this.pressBuildButton(button, `slot ${slotId}`, did);
+    const url = `/build.php?id=${slotId}`;
+    const button = () => this.page.locator('.upgradeButtonsContainer .section1 button.green.build:not(.disabled)').first();
+    await this.goto(url);
+    if (!(await button().isVisible().catch(() => false)) && (await this.topUpFromHero(this.page.locator('#contract'), did))) {
+      await this.goto(url);
+    }
+    return this.pressBuildButton(button(), `slot ${slotId}`, did);
   }
 
-  // Constructs building `gid` on empty slot `slotId`. Returns false if it is not available.
+  // Constructs building `gid` on empty slot `slotId`, topping up from the hero like upgrade().
+  // Returns false if it is not available.
   async construct(slotId, gid, category, did) {
-    await this.goto(`/build.php?id=${slotId}${category ? `&category=${category}` : ''}`);
-    const button = this.page.locator(`button.green.new[onclick*="gid=${gid}&"]:not(.disabled)`).first();
-    return this.pressBuildButton(button, `building ${gid} on slot ${slotId}`, did);
+    const url = `/build.php?id=${slotId}${category ? `&category=${category}` : ''}`;
+    const button = () => this.page.locator(`button.green.new[onclick*="gid=${gid}&"]:not(.disabled)`).first();
+    await this.goto(url);
+    if (!(await button().isVisible().catch(() => false))
+      && (await this.topUpFromHero(this.page.locator(`#contract_building${gid} #contract`), did))) {
+      await this.goto(url);
+    }
+    return this.pressBuildButton(button(), `building ${gid} on slot ${slotId}`, did);
+  }
+
+  // A build page marks the resources a job is short of; clicking one opens the game's own
+  // "transfer from hero" dialog pre-filled with the shortfall. Returns true if anything was moved.
+  async topUpFromHero(contract, did) {
+    const lacking = contract.locator('.inlineIcon.resource.transfer.fillUp').first();
+    if (!(await lacking.isVisible().catch(() => false))) return false;
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (did != null && active !== did) throw new Error(`Refusing hero transfer: village ${active} is active, expected ${did}`);
+    if (this.dryRun) {
+      this.log('[dry run] would transfer the missing resources from the hero');
+      return false;
+    }
+    await lacking.click();
+    const dlg = this.page.locator('.dialog, .dialogWrapper, #dialogContent').filter({ has: this.page.locator('input[name="lumber"]') }).last();
+    await dlg.waitFor({ timeout: 10_000 });
+    await this.pause(600, 1200);
+    const amounts = await dlg.evaluate((d) => Object.fromEntries(['lumber', 'clay', 'iron', 'crop']
+      .map((n) => [n, Number((d.querySelector(`input[name="${n}"]`)?.value ?? '').replace(/\D/g, '')) || 0])));
+    // "Transfer" or "Transfer selected", never "Transfer maximum".
+    const transfer = dlg.locator('button').filter({ hasText: /^\s*Transfer( selected)?\s*$/ }).first();
+    if (!Object.values(amounts).some(Boolean) || (await transfer.isDisabled())) {
+      this.log('The hero has nothing to cover the shortfall.');
+      await this.page.keyboard.press('Escape');
+      return false;
+    }
+    await Promise.all([
+      this.page.waitForResponse((r) => r.url().includes('/hero/v2/inventory/use-item') && r.request().method() === 'POST', { timeout: 15_000 }),
+      transfer.click(),
+    ]);
+    await this.pause(1500, 2500);
+    this.log(`Transferred from hero: ${Object.entries(amounts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')}.`);
+    return true;
   }
 
   // `did` is the village the click is meant for; refuse if a different village is active.
@@ -272,6 +316,55 @@ export class Travian {
     return true;
   }
 
+  // Stock, free merchants and merchant movements of every own village, in one request.
+  async economy() {
+    const data = await this.graphql(`{ownPlayer{villages{id name
+      resources{lumberStock clayStock ironStock cropStock}
+      marketplace{merchantsInfo{total capacity available}
+        merchantsMovements{edges{node{type cancelled to{id} carriedResources{lumber clay iron crop}}}}}}}}`);
+    return data.ownPlayer.villages.map((v) => ({
+      did: v.id,
+      name: v.name,
+      stock: {
+        wood: v.resources.lumberStock, clay: v.resources.clayStock, iron: v.resources.ironStock, crop: v.resources.cropStock,
+      },
+      merchants: v.marketplace?.merchantsInfo ?? { total: 0, capacity: 0, available: 0 },
+      outgoing: (v.marketplace?.merchantsMovements?.edges ?? []).map((e) => e.node)
+        .filter((n) => n.type === 'OUTGOING' && !n.cancelled)
+        .map((n) => ({
+          to: n.to.id,
+          resources: {
+            wood: n.carriedResources.lumber, clay: n.carriedResources.clay, iron: n.carriedResources.iron, crop: n.carriedResources.crop,
+          },
+        })),
+    }));
+  }
+
+  // Sends resources with merchants from the active village to (x|y) through the marketplace form.
+  async sendResources(did, { x, y }, amounts) {
+    await this.goto('/build.php?gid=17&t=5');
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to send resources: village ${active} is active, expected ${did}`);
+    const form = this.page.locator('#content');
+    await form.locator('input[name="x"]').fill(String(x));
+    await form.locator('input[name="y"]').fill(String(y));
+    const names = { wood: 'lumber', clay: 'clay', iron: 'iron', crop: 'crop' };
+    for (const [key, name] of Object.entries(names)) {
+      await form.locator(`input[name="${name}"]`).fill(String(amounts[key] ?? 0));
+      await this.pause(200, 500);
+    }
+    if (this.dryRun) {
+      this.log(`[dry run] would send ${JSON.stringify(amounts)} to (${x}|${y})`);
+      return true;
+    }
+    const [response] = await Promise.all([
+      this.page.waitForResponse((r) => r.url().includes('/marketplace/resources/send') && r.request().method() === 'POST', { timeout: 15_000 }),
+      form.locator('button.send:not(.disabled)').click(),
+    ]);
+    await this.pause();
+    return response.ok();
+  }
+
   // Map tiles in a 31x31 area centred on (x, y), as the game's map loads them.
   async mapTiles(x, y) {
     const res = await this.api('/api/v1/map/position', { data: { x, y, zoomLevel: 3, ignorePositions: [] } });
@@ -291,7 +384,8 @@ export class Travian {
   }
 
   async farmLists() {
-    const data = await this.graphql(`{ownPlayer{farmLists{id name ownerVillage{id name}
+    const data = await this.graphql(`{ownPlayer{farmLists{id name
+      ownerVillage{id name troops{ownTroopsAtTown{units{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}
       slots{id isActive target{x y} troop{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}}`);
     return data.ownPlayer.farmLists;
   }

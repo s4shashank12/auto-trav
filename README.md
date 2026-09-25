@@ -37,9 +37,20 @@ DRY_RUN=true npm run play   # log what would happen without clicking
 Romans can upgrade one resource field and one building at the same time. With Travian Plus, one
 more job fits in the waiting loop. The bot keeps each small village's queue at `BUILD_QUEUE_MAX`
 jobs (default 3; use 2 without Plus). In `--loop` mode it wakes up when the first job finishes, so
-queues don't sit idle, and raids at most every `RAID_EVERY_MINUTES` (default 10). Fields go lowest level first. Ties go to the resource you hold the least of, and cropland
+queues don't sit idle, and raids at most every `RAID_EVERY_MINUTES` (default 10).
+
+Fields go lowest level first. Ties go to the resource you hold the least of, and cropland
 goes first when net crop falls under 10/h. Buildings go least developed first, compared with their
 max level. Missing buildings are constructed on an empty slot once the game allows them.
+
+Queues are kept busy from two sources of resources:
+
+- **Merchants:** when a small village drops under 30% of its storage in any resource, the nearest
+  big village with a surplus sends merchants to top it up towards 70%. Shipments already on the way
+  count towards that, and every source keeps 20,000 of each resource.
+- **Hero inventory:** when a job is still short, the bot clicks the missing resource on the build
+  page. That opens the game's own "transfer from hero" dialog, pre-filled with exactly the
+  shortfall. The bot confirms it, then builds. It never uses gold (NPC exchange, master builder).
 
 ### Raiding
 
@@ -56,7 +67,8 @@ max level. Missing buildings are constructed on an empty slot once the game allo
    Each oasis gets up to `RAID_PER_SLOT` units (default 5), split so the village's cavalry covers
    every target. Re-running only adds oases that are not on a list yet.
 
-`raid` looks up every target on the map again. It ticks only the slots whose oasis is still
+`raid` only ticks as many slots as the cavalry at home can fill. It looks up every target on the
+map again. It ticks only the slots whose oasis is still
 unoccupied and empty and has no raid already under way. Then it presses Start, which sends only
 the ticked slots. An oasis with animals again, or one a player has taken, is skipped until it
 qualifies again.

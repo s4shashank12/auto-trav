@@ -45,6 +45,44 @@ export function pickBuildings(slots, fields) {
   return jobs.sort((a, b) => (b.canBuild - a.canBuild) || (a.progress - b.progress) || (a.rank - b.rank));
 }
 
+const RESOURCES = ['wood', 'clay', 'iron', 'crop'];
+
+// Tops up a small village from the nearest big village with a surplus, so its build queue does
+// not wait on resources. Triggers when any resource is under `low` of storage and fills towards
+// `fill`, counting merchants already on the way. Sources keep `reserve` of each resource.
+export async function supplyVillage(game, village, status, villages, { low = 0.3, fill = 0.7, reserve = 20_000 } = {}) {
+  const cap = status.maxStorage;
+  if (!RESOURCES.some((r) => status.stock[r] < low * cap[r])) return false;
+  const economy = await game.economy();
+  const incoming = Object.fromEntries(RESOURCES.map((r) => [r, 0]));
+  for (const v of economy) {
+    for (const move of v.outgoing.filter((m) => m.to === village.did)) {
+      for (const r of RESOURCES) incoming[r] += move.resources[r];
+    }
+  }
+  const want = Object.fromEntries(RESOURCES.map((r) => [r, Math.max(0, Math.floor(fill * cap[r] - status.stock[r] - incoming[r]))]));
+  if (RESOURCES.every((r) => status.stock[r] + incoming[r] >= low * cap[r])) return false;
+
+  const dist = (v) => Math.hypot(v.x - village.x, v.y - village.y);
+  const sources = villages.filter((v) => !canDevelop(v)).sort((a, b) => dist(a) - dist(b));
+  for (const source of sources) {
+    const eco = economy.find((e) => e.did === source.did);
+    if (!eco?.merchants.available) continue;
+    const send = Object.fromEntries(RESOURCES.map((r) => [r, Math.max(0, Math.min(want[r], eco.stock[r] - reserve))]));
+    const total = RESOURCES.reduce((sum, r) => sum + send[r], 0);
+    if (total < 500) continue;
+    const room = eco.merchants.available * eco.merchants.capacity;
+    if (total > room) for (const r of RESOURCES) send[r] = Math.floor((send[r] * room) / total);
+    game.log(`${village.name}: shipping ${RESOURCES.map((r) => `${send[r]} ${r}`).join(', ')} from ${source.name}.`);
+    await game.switchVillage(source.did);
+    const sent = await game.sendResources(source.did, village, send);
+    await game.switchVillage(village.did);
+    return sent;
+  }
+  game.log(`${village.name}: low on resources, but no big village has a surplus and free merchants.`);
+  return false;
+}
+
 // Each returns a description of the queued job, or null when nothing could be queued.
 async function queueField(game, village, status) {
   const field = pickField(status);
@@ -75,7 +113,7 @@ async function queueBuilding(game, village, status) {
 // Maxes resource fields and important buildings in a village under the population limit, filling
 // the build queue up to `queueMax` jobs (3 for Romans with Travian Plus: one field and one building
 // running, plus one in the waiting loop). Returns the village's queue afterwards.
-export async function developVillage(game, village, { queueMax = 3 } = {}) {
+export async function developVillage(game, village, { queueMax = 3, villages = [] } = {}) {
   await game.switchVillage(village.did);
   let status = await game.status();
   game.log(formatStatus(status));
@@ -87,6 +125,8 @@ export async function developVillage(game, village, { queueMax = 3 } = {}) {
     game.log(`Skipping ${village.name}: population ${status.population} is not under the limit.`);
     return status.queue;
   }
+
+  if (villages.length) await supplyVillage(game, village, status, villages);
 
   // Romans build a field and a building side by side, so one type may hold at most queueMax - 1 jobs.
   const perType = status.roman ? queueMax - 1 : queueMax;
@@ -233,14 +273,23 @@ export async function runFarmLists(game) {
   for (const list of lists) {
     await game.openFarmLists(list.ownerVillage.id);
     const running = await game.runningSlots(list.id);
+    // Troops still riding home are neither "under way" nor at home, so only tick what fits.
+    const home = { ...(list.ownerVillage.troops?.ownTroopsAtTown?.units ?? {}) };
     const safe = [];
+    let waiting = 0;
     for (const slot of list.slots.filter((s) => s.isActive && !running.has(s.id))) {
       const tile = await tiles.get(slot.target.x, slot.target.y);
-      if (isRaidableOasis(tile)) safe.push(slot);
-      else game.log(`${list.ownerVillage.name} "${list.name}": skipping (${slot.target.x}|${slot.target.y}), ${unsafeReason(tile)}.`);
+      if (!isRaidableOasis(tile)) {
+        game.log(`${list.ownerVillage.name} "${list.name}": skipping (${slot.target.x}|${slot.target.y}), ${unsafeReason(tile)}.`);
+      } else if (Object.entries(slot.troop).every(([unit, n]) => (home[unit] ?? 0) >= n)) {
+        for (const [unit, n] of Object.entries(slot.troop)) home[unit] -= n;
+        safe.push(slot);
+      } else {
+        waiting++;
+      }
     }
     if (!safe.length) {
-      game.log(`${list.ownerVillage.name} "${list.name}": nothing to send (${running.size} raids under way).`);
+      game.log(`${list.ownerVillage.name} "${list.name}": nothing to send (${running.size} under way, ${waiting} waiting for troops).`);
       continue;
     }
     const results = await game.startFarmListTargets(list.id, safe.map((s) => s.id));

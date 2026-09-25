@@ -65,8 +65,9 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 // Develops every small village. Returns seconds until the first queued job finishes, or null.
 async function build(game) {
   let soonest = null;
-  for (const v of (await game.villages()).filter(canDevelop)) {
-    const queue = await developVillage(game, v, { queueMax: Number(env.BUILD_QUEUE_MAX ?? 3) });
+  const villages = await game.villages();
+  for (const v of villages.filter(canDevelop)) {
+    const queue = await developVillage(game, v, { queueMax: Number(env.BUILD_QUEUE_MAX ?? 3), villages });
     for (const q of queue) {
       if (q.secondsLeft != null && (soonest == null || q.secondsLeft < soonest)) soonest = q.secondsLeft;
     }
