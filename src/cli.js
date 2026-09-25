@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { canDevelop, POPULATION_LIMIT } from './rules.js';
@@ -43,11 +44,22 @@ async function withLock(fn) {
       else await sleep(3000);
     }
   }
+  holdingLock = true;
   try {
     return await fn();
   } finally {
     await fs.rm(LOCK_FILE, { force: true });
+    holdingLock = false;
   }
+}
+
+// Exit on Ctrl+C / kill, releasing the lock if a pass was in progress.
+let holdingLock = false;
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    if (holdingLock) rmSync(LOCK_FILE, { force: true });
+    process.exit(130);
+  });
 }
 
 async function build(game) {
