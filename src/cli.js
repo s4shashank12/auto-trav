@@ -23,7 +23,7 @@ Commands:
 Configuration comes from environment variables (or .env via npm scripts):
   TRAVIAN_SERVER, TRAVIAN_USERNAME, TRAVIAN_PASSWORD
   HEADLESS=false, DRY_RUN=true, BUILD_QUEUE_MAX (3), RAID_RADIUS (45), RAID_EVERY_MINUTES (10),
-  RAID_CYCLE_MINUTES (60),
+  RAID_CYCLE_MINUTES (= RAID_EVERY_MINUTES),
   TRAIN_EVERY_MINUTES (30), LOOP_MIN_MINUTES (20), LOOP_MAX_MINUTES (40), LOOP_FLOOR_MINUTES (4)`;
 
 const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'play', 'screenshot'];
@@ -83,7 +83,7 @@ let lastRaid = 0;
 const raidEvery = Number(env.RAID_EVERY_MINUTES ?? 10);
 async function raid(game) {
   lastRaid = Date.now();
-  await runFarmLists(game, { waveMinutes: raidEvery, cycleMinutes: Number(env.RAID_CYCLE_MINUTES ?? 60) });
+  await runFarmLists(game, { waveMinutes: raidEvery, cycleMinutes: Number(env.RAID_CYCLE_MINUTES ?? raidEvery) });
 }
 
 let lastTrain = 0;

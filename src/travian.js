@@ -454,6 +454,30 @@ export class Travian {
     return arrival;
   }
 
+  // Changes farm list slots with the request the "Edit target" dialog sends, in batches.
+  // `slots` are { id, listId, x, y, troops }.
+  async updateFarmListSlots(slots) {
+    for (let i = 0; i < slots.length; i += 50) {
+      const batch = slots.slice(i, i + 50);
+      if (this.dryRun) {
+        this.log(`[dry run] would update ${batch.length} farm list targets`);
+        continue;
+      }
+      await this.api('/api/v1/farm-list/slot', {
+        slots: batch.map((s) => ({
+          listId: s.listId,
+          x: s.x,
+          y: s.y,
+          units: Object.fromEntries(Array.from({ length: 10 }, (_, k) => [`t${k + 1}`, s.troops[`t${k + 1}`] ?? 0])),
+          active: true,
+          abandoned: false,
+          id: s.id,
+        })),
+      }, 'PUT');
+      await this.pause(1000, 2000);
+    }
+  }
+
   // Deletes farm list slots with the request the list's "Delete" menu entry sends.
   async deleteFarmListSlots(slotIds) {
     if (!slotIds.length) return;

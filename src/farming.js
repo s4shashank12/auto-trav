@@ -50,14 +50,15 @@ export function listUnit(list) {
   return Object.entries(RAID_UNITS).find(([, u]) => words === u.short || words === u.name)?.[0];
 }
 
-// How many more farm list slots each raiding unit of a village can cover: its troops at home plus
-// those out on running raids, minus the slots it already has.
+// How many more farm list targets each raiding unit of a village can take on, budgeting
+// `planUnits` per target: its troops at home plus the targets being raided (their troops are out),
+// minus the targets it already has.
 export function slotCapacity(home, lists) {
   const cap = {};
-  for (const [unit, { perSlot }] of Object.entries(RAID_UNITS)) {
+  for (const [unit, { planUnits }] of Object.entries(RAID_UNITS)) {
     const slots = lists.flatMap((l) => l.slots).filter((s) => (s.troop[unit] ?? 0) > 0);
-    const away = slots.filter((s) => s.isRunning).reduce((n, s) => n + s.troop[unit], 0);
-    cap[unit] = Math.max(0, Math.floor(((home[unit] ?? 0) + away) / perSlot) - slots.length);
+    const running = slots.filter((s) => s.isRunning).length;
+    cap[unit] = Math.max(0, Math.floor((home[unit] ?? 0) / planUnits) + running - slots.length);
   }
   return cap;
 }
@@ -96,6 +97,16 @@ export async function setupFarmLists(game, villages, { radius = 45 } = {}) {
   if (tooFar.length) {
     game.log(`Removing ${tooFar.length} targets more than ${radius} fields from their village.`);
     await game.deleteFarmListSlots(tooFar);
+    lists = (await game.farmLists()).filter(isAutoFarmList);
+  }
+
+  // Bring every bot slot to its unit's current per-raid amount.
+  const resize = lists.flatMap((l) => l.slots.map((s) => ({ l, s, unit: listUnit(l) })))
+    .filter(({ s, unit }) => Object.entries(s.troop).some(([u, n]) => n !== (u === unit ? RAID_UNITS[unit].perSlot : 0)))
+    .map(({ l, s, unit }) => ({ id: s.id, listId: l.id, x: s.target.x, y: s.target.y, troops: { [unit]: RAID_UNITS[unit].perSlot } }));
+  if (resize.length) {
+    game.log(`Setting ${resize.length} targets to ${Object.values(RAID_UNITS).map((u) => `${u.perSlot} ${u.name}`).join(' / ')} per raid.`);
+    await game.updateFarmListSlots(resize);
     lists = (await game.farmLists()).filter(isAutoFarmList);
   }
   const troops = await game.villageTroops();
@@ -172,12 +183,13 @@ function unsafeReason(tile) {
 const RAID_STATE = '.auth/raid-state.json';
 
 // Sends one raid wave from the bot's own farm lists ("rainbow" farming on an interval). Every wave
-// (every `waveMinutes`) each list sends its next slice of targets, so every target is raided about
-// once per `cycleMinutes`, whether or not earlier raids are back: the targets raided longest ago go
-// first, nearest first on ties, and a target is not raided twice within one cycle. Troops at home
-// are the only other limit. Right before sending, each target is checked on the map again and only
+// (every `waveMinutes`) each list sends its targets again, whether or not earlier raids are back,
+// so every target is raided about once per `cycleMinutes` (by default every wave). Nearest targets
+// go first: their troops return soonest, so as many oases as the troops can sustain are hit every
+// wave, and far ones get what is left. A target is not raided twice within one cycle, and troops at
+// home are the other limit. Right before sending, each target is checked on the map again and only
 // oases that are still unoccupied and animal-free are sent.
-export async function runFarmLists(game, { waveMinutes = 10, cycleMinutes = 60 } = {}) {
+export async function runFarmLists(game, { waveMinutes = 10, cycleMinutes = 10 } = {}) {
   const lists = (await game.farmLists()).filter(isAutoFarmList);
   if (!lists.length) {
     game.log('No "Oases (auto)" farm lists yet; run farm-setup first.');
@@ -198,7 +210,7 @@ export async function runFarmLists(game, { waveMinutes = 10, cycleMinutes = 60 }
     const active = list.slots.filter((s) => s.isActive);
     const quota = Math.ceil((active.length * waveMinutes) / cycleMinutes);
     const order = active.filter((s) => now - (lastSent[s.id] ?? 0) >= fresh)
-      .sort((a, b) => (lastSent[a.id] ?? 0) - (lastSent[b.id] ?? 0) || dist(a) - dist(b));
+      .sort((a, b) => dist(a) - dist(b));
     const send = [];
     let unsafe = 0;
     let short = 0;
