@@ -1,4 +1,5 @@
 import { runFarmLists, setupFarmLists } from './farming.js';
+import { sendHero } from './hero.js';
 import {
   importWorld, inRaidHours, raidInactives, syncInactiveLists,
 } from './inactive.js';
@@ -7,6 +8,7 @@ import { researchUnits } from './research.js';
 import { improveUnits } from './smithy.js';
 import { canDevelop, isAutoFarmList } from './rules.js';
 import { developVillage } from './strategy.js';
+import { CaptchaError } from './travian.js';
 import { findInactives } from './world.js';
 
 const minutesSince = (t) => (Date.now() - t) / 60_000;
@@ -86,6 +88,11 @@ export class Runner {
     return result;
   }
 
+  // Sends the hero out if it is home and fit: an adventure first, else an oasis with animals.
+  async hero({ force = false } = {}) {
+    this.snapshot.hero = await sendHero(this.game, this.cfg, { force });
+  }
+
   // Imports today's world data (once a day unless forced) and, when inactive raiding is on,
   // brings the inactive farm lists up to date.
   async updateWorld(villages, { force = false } = {}) {
@@ -121,6 +128,13 @@ export class Runner {
       await this.updateWorld(villages).catch((err) => game.log(`World data import failed: ${err.message}`));
       if (cfg.inactive.enabled && minutesSince(this.lastInactiveRaid) >= 9.5 && inRaidHours(cfg)) await this.raidInactives(villages);
     }
+    if (cfg.features.heroRaid) {
+      // A failed hero outing should not cost the rest of the round (a CAPTCHA still stops it).
+      await this.hero().catch((err) => {
+        if (err instanceof CaptchaError) throw err;
+        game.log(`Hero: ${err.message}`);
+      });
+    }
     if (cfg.features.raid && minutesSince(this.lastRaid) >= cfg.raid.everyMinutes - 0.5) await this.raid(villages);
     this.snapshot.updatedAt = new Date().toISOString();
     return soonest;
@@ -135,6 +149,7 @@ export class Runner {
     else if (name === 'train') await this.train(villages);
     else if (name === 'research') await this.research(villages);
     else if (name === 'smithy') await this.smithy(villages, { force: true });
+    else if (name === 'hero') await this.hero({ force: true });
     else if (name === 'raid') await this.raid(villages);
     else if (name === 'farm-setup') result = await this.farmSetup(villages);
     else if (name === 'farm-rebuild') result = await this.farmSetup(villages, { rebuild: true });
