@@ -67,6 +67,20 @@ test('pickBuildings constructs missing buildings once prerequisites are met', ()
   assert.ok(!names.includes('construct Brickyard'), 'needs a level 10 clay pit');
 });
 
+test('pickBuildings puts the rally point in slot 39 and waits for prerequisites', () => {
+  const buildings = [
+    { gid: 16, name: 'Rally Point', maxLevel: 5 },
+    { gid: 19, name: 'Barracks', maxLevel: 20, requires: { 15: 3, 16: 1 } },
+  ];
+  const empty = (id) => ({ id, gid: 0, level: 0 });
+  const slots = [{ id: 26, gid: 15, level: 5, canBuild: true }, empty(19), empty(39), empty(40)];
+  const jobs = pickBuildings(slots, [], buildings);
+  assert.deepEqual(jobs.map((j) => [j.name, j.slotId]), [['Rally Point', 39]], 'barracks waits for the rally point');
+  assert.deepEqual(pickBuildings(slots.filter((s) => s.id !== 39), [], buildings), [], 'no slot 39, no rally point');
+  const withRally = [...slots.filter((s) => s.id !== 39), { id: 39, gid: 16, level: 1, canBuild: true }];
+  assert.deepEqual(pickBuildings(withRally, [], buildings).map((j) => [j.kind, j.name, j.slotId]), [['construct', 'Barracks', 19], ['upgrade', 'Rally Point', 39]]);
+});
+
 test('farm list helpers', () => {
   const { units } = cfg.raid;
   assert.equal(listUnit({ name: 'Oases (auto) EC 2', slots: [] }, cfg), 't6');
@@ -89,4 +103,21 @@ test('trainAmount respects queue, resources, game max and crop', () => {
   assert.equal(trainAmount({ ...info, queueSeconds: 3600 }, opts), 0, 'queue long enough');
   assert.equal(trainAmount({ ...info, production: { crop: 210 } }, opts), 10, 'crop room');
   assert.equal(trainAmount({ ...info, max: 3 }, opts), 3, 'game max');
+});
+
+test('training: per-village buildings, "none", and what to research', async () => {
+  const { trainingBuildings, trainingUnit } = await import('../src/rules.js');
+  const { wantedResearch } = await import('../src/research.js');
+  const c = resolveConfig({
+    train: { overrides: { Big: { 19: 't3', 21: 't7' }, Quiet: { 19: 'none' } } },
+    research: { units: ['t5'], overrides: { Small: ['t4'] } },
+  });
+  const big = { name: 'Big', population: 900 };
+  assert.deepEqual(trainingBuildings(big, c), [19, 20, 21]);
+  assert.equal(trainingUnit(big, 21, c), 't7');
+  assert.equal(trainingUnit({ name: 'Quiet' }, 19, c), null);
+  assert.equal(trainingUnit({ name: 'Quiet' }, 20, c), 't6', 'other buildings keep the default');
+  assert.deepEqual(wantedResearch(big, c).sort(), ['t3', 't5', 't6', 't7']);
+  assert.deepEqual(wantedResearch({ name: 'Small', population: 100 }, c), ['t4'], 'small villages do not train');
+  assert.deepEqual(wantedResearch(big, resolveConfig({ research: { fromTraining: false } })), []);
 });

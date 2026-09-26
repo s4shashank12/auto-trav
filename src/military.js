@@ -1,6 +1,7 @@
 import {
-  canDevelop, reinforceTarget, trainingUnit,
+  canDevelop, reinforceTarget, trainingBuildings, trainingUnit,
 } from './rules.js';
+import { noteResearched } from './research.js';
 
 const RESOURCES = ['wood', 'clay', 'iron', 'crop'];
 const REINFORCE_STATE = 'reinforcements';
@@ -62,18 +63,19 @@ async function relieveCrop(game, village, target, crop, targetCrop, cfg) {
 // target village instead of training. Returns a summary per building.
 export async function trainTroops(game, villages, cfg) {
   const {
-    aheadMinutes, targetMinutes, reserve, units,
+    aheadMinutes, targetMinutes, reserve,
   } = cfg.train;
   const { cropLow } = cfg.reinforce;
   const target = reinforceTarget(villages, cfg);
   let targetCrop = null;
   const summary = [];
   for (const village of villages.filter((v) => !canDevelop(v, cfg))) {
-    for (const gid of Object.keys(units).map(Number)) {
+    for (const gid of trainingBuildings(village, cfg)) {
       const unit = trainingUnit(village, gid, cfg);
       if (!unit) continue;
       const info = await game.trainingInfo(village.did, gid, unit);
       if (!info) continue;
+      await noteResearched(game, village.did, unit);
       const building = BUILDING_NAMES[gid] ?? `Building ${gid}`;
       const crop = info.production.crop;
       if (crop < cropLow) {

@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG = {
     train: true, // keep barracks and stables training
     reinforce: true, // move troops to the reinforcement target when crop runs low
     raid: true, // send farm list waves
+    research: true, // research units in the Academy (see research below)
   },
 
   build: {
@@ -50,8 +51,16 @@ export const DEFAULT_CONFIG = {
     aheadMinutes: 60, // top a queue up when less than this is left
     targetMinutes: 180, // ... to this much
     reserve: 5000, // resources of each kind kept back
-    units: { 19: 't2', 20: 't6' }, // unit per building gid (19 barracks, 20 stable)
-    overrides: {}, // per village name, e.g. { "Chingdi": { "19": "t3" } }
+    units: { 19: 't2', 20: 't6' }, // unit per building gid (19 barracks, 20 stable); "none" = idle
+    overrides: {}, // per village name, e.g. { "Chingdi": { "19": "t3" } }; may add buildings (21 workshop)
+  },
+
+  // Academy research, checked with training. A village researches its list (its override, else
+  // the default list) plus, with fromTraining, the units it is set to train. One at a time.
+  research: {
+    fromTraining: true,
+    units: [], // e.g. ["t3", "t6"]
+    overrides: {}, // per village name: a list that replaces the default one
   },
 
   reinforce: {
@@ -135,6 +144,7 @@ export const CONFIG_FIELDS = [
   { section: 'General', path: 'features.train', type: 'boolean', label: 'Train troops' },
   { section: 'General', path: 'features.reinforce', type: 'boolean', label: 'Reinforce when crop is low' },
   { section: 'General', path: 'features.raid', type: 'boolean', label: 'Raid oases' },
+  { section: 'General', path: 'features.research', type: 'boolean', label: 'Research units in the Academy' },
   { section: 'Building', path: 'build.populationLimit', type: 'number', label: 'Population limit', help: 'Villages at or above this are not built in.' },
   { section: 'Building', path: 'build.queueMax', type: 'number', label: 'Queue length', help: '3 for Romans with Plus, 2 without.' },
   { section: 'Building', path: 'build.cropFirstBelow', type: 'number', label: 'Cropland first below (crop/h)' },
@@ -150,6 +160,9 @@ export const CONFIG_FIELDS = [
   { section: 'Training', path: 'train.reserve', type: 'number', label: 'Resource reserve' },
   { section: 'Training', path: 'train.units', type: 'json', label: 'Unit per building', help: '{ "19": "t2", "20": "t6" }' },
   { section: 'Training', path: 'train.overrides', type: 'json', label: 'Per-village overrides', help: '{ "Village": { "19": "t3" } }' },
+  { section: 'Research', path: 'research.fromTraining', type: 'boolean', label: 'Research what a village trains' },
+  { section: 'Research', path: 'research.units', type: 'json', label: 'Units to research', help: '["t3", "t6"]' },
+  { section: 'Research', path: 'research.overrides', type: 'json', label: 'Per-village research', help: '{ "Village": ["t3"] }' },
   { section: 'Reinforcement', path: 'reinforce.target', type: 'string', label: 'Target village', help: 'Empty means the capital.' },
   { section: 'Reinforcement', path: 'reinforce.cropLow', type: 'number', label: 'Reinforce below (crop/h)' },
   { section: 'Reinforcement', path: 'reinforce.cropTarget', type: 'number', label: 'Until back to (crop/h)' },

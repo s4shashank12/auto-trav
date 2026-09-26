@@ -26,14 +26,19 @@ dashboard shows and manages them.
   - A REST API behind a bearer token.
   - Postgres storage, with Travian passwords encrypted using AES-256-GCM.
   - One worker per Travian account, all sharing one Chromium.
-- **`dashboard/`**: a static React app for Firebase Hosting. From it you can:
-  - add Travian accounts on any game world;
-  - start and stop them;
-  - see villages, build queues, raids and training;
+- **`dashboard/`**: a static React app for Firebase Hosting, in light and dark. Units and buildings
+  appear by name (for your tribe), never as codes. From it you can:
+  - add Travian accounts on any game world, start and stop them;
+  - see every village at a glance: build queue, training, research and raids;
+  - **Army**: drag units onto a table of training buildings and research lists. The top row is
+    the default for every village; drop onto a village's row to give it its own choice. Tapping
+    a unit and then a slot works too (handy on phones);
+  - **Buildings**: reorder the build list by dragging, drag buildings in from a catalog, set how
+    far each goes, and see prerequisites the list can't reach;
+  - **Raiding**: drag to order the troops used for oasis and inactive-player raids;
   - find inactive players near you and raid them on a schedule;
-  - read live logs and error screenshots;
-  - run actions on demand;
-  - edit every setting.
+  - read live logs and error screenshots, run actions on demand, and edit every other setting.
+  Changes on any tab are collected and saved together.
 - **`deploy/`**:
   - `docker-compose.yml` for the VM: Postgres, the backend, Watchtower and Caddy.
   - `docker-compose.local.yml` for running the whole stack on your own machine.
@@ -294,8 +299,9 @@ changes them per account; only the changed values are stored.
     the five production buildings) go to max.
   - Each queue holds `build.queueMax` jobs (3 for Romans with Travian Plus).
   - Fields go lowest level first, with cropland first when crop runs low.
-  - Missing buildings are constructed once the game allows them.
-  - Military buildings are never built, and population is re-checked before every click.
+  - Missing buildings are constructed once the game allows them (the Rally Point in its own
+    slot). Military buildings are only built if you add them to the list.
+  - Population is re-checked before every click.
 - **Supply:**
   - A small village under 30% of storage gets merchants from the nearest big village with a
     surplus. Shipments already on the way count.
@@ -304,9 +310,14 @@ changes them per account; only the changed values are stored.
   - Gold (NPC exchange, master builder) is never used.
 - **Training:**
   - Big villages keep their barracks and stables queued 3 hours ahead with the configured
-    unit: Praetorians and Equites Caesaris by default, with per-village overrides such as
-    Imperians in one barracks.
+    unit: Praetorians and Equites Caesaris by default. Villages can have their own unit per
+    building (e.g. Imperians in one barracks), add a building (a Workshop), or leave one idle.
   - Training uses only resources above the reserve.
+- **Research:**
+  - Before training, each village's Academy researches the units the village trains, plus any on
+    the research list (the default list, or a village's own). One unit at a time, as soon as the
+    Academy allows it, never with the paid or video buttons.
+  - Units waiting on buildings are shown with what they need (e.g. "needs Stable Level 10").
 - **Reinforcement:** a village whose crop would drop under 200/h stops training and sends
   troops to the capital (or `reinforce.target`), until it is back to 600/h. That happens only
   while the target keeps at least 2,000/h.

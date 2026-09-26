@@ -3,6 +3,7 @@ import {
   importWorld, inRaidHours, raidInactives, syncInactiveLists,
 } from './inactive.js';
 import { trainTroops } from './military.js';
+import { researchUnits } from './research.js';
 import { canDevelop } from './rules.js';
 import { developVillage } from './strategy.js';
 import { findInactives } from './world.js';
@@ -26,6 +27,8 @@ export class Runner {
   async villages() {
     const villages = await this.game.villages();
     this.snapshot.villages = villages.map((v) => ({ ...v, develop: canDevelop(v, this.cfg) }));
+    // The dashboard names units by tribe.
+    if (this.snapshot.tribe == null) this.snapshot.tribe = await this.game.tribe().catch(() => null);
     return villages;
   }
 
@@ -46,7 +49,14 @@ export class Runner {
 
   async train(villages) {
     this.lastTrain = Date.now();
+    // Research first: a unit has to be researched before it can be trained.
+    if (this.cfg.features.research) await this.research(villages);
     this.snapshot.training = await trainTroops(this.game, villages, this.cfg);
+  }
+
+  async research(villages) {
+    this.snapshot.research = await researchUnits(this.game, villages, this.cfg);
+    this.snapshot.researchAt = new Date().toISOString();
   }
 
   async raid(villages) {
@@ -106,6 +116,7 @@ export class Runner {
     let result = null;
     if (name === 'build') await this.build(villages);
     else if (name === 'train') await this.train(villages);
+    else if (name === 'research') await this.research(villages);
     else if (name === 'raid') await this.raid(villages);
     else if (name === 'farm-setup') result = await this.farmSetup(villages);
     else if (name === 'world') result = await this.updateWorld(villages, { force: true });

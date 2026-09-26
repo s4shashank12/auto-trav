@@ -6,7 +6,8 @@ import Connect from './components/Connect.jsx';
 import ServerDetail from './components/ServerDetail.jsx';
 import ServerForm from './components/ServerForm.jsx';
 import ServerList from './components/ServerList.jsx';
-import { hostOf, navigate } from './util.js';
+import { Icon, StatusBadge } from './components/ui.jsx';
+import { hostOf, navigate, usePoll } from './util.js';
 
 // Hash routes: #/ (servers), #/new, #/servers/:id[/tab]
 function useRoute() {
@@ -20,9 +21,74 @@ function useRoute() {
   return route;
 }
 
+const THEMES = ['auto', 'light', 'dark'];
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('auto-travian.theme') ?? 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+  useEffect(() => {
+    if (theme === 'auto') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('auto-travian.theme', theme);
+    } catch { /* private mode */ }
+  }, [theme]);
+  return [theme, () => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length])];
+}
+
+function Sidebar({
+  client, meta, current, open, onClose, onDisconnect, theme, nextTheme,
+}) {
+  const { data: servers } = usePoll(() => client.servers(), 10_000, [client]);
+  return (
+    <>
+      <div className={`scrim ${open ? 'show' : ''}`} onClick={onClose} aria-hidden="true" />
+      <nav className={`sidebar ${open ? 'open' : ''}`} aria-label="Servers">
+        <a className="brand" href="#/" onClick={onClose}>
+          <img src="/favicon.svg" alt="" width="26" height="26" />
+          <span>Travian Bot</span>
+        </a>
+        <div className="side-section">
+          <div className="side-title">
+            <span>Servers</span>
+            <a className="icon-btn" href="#/new" onClick={onClose} title="Add server" aria-label="Add server"><Icon name="plus" /></a>
+          </div>
+          <a className={`side-link ${current == null ? 'active' : ''}`} href="#/" onClick={onClose}>All servers</a>
+          {servers?.map((s) => (
+            <a key={s.id} className={`side-link server ${current === s.id ? 'active' : ''}`} href={`#/servers/${s.id}`} onClick={onClose}>
+              <span className="side-name">{s.name}</span>
+              <StatusBadge status={s.status} />
+            </a>
+          ))}
+        </div>
+        <div className="side-foot">
+          <button type="button" className="btn ghost small" onClick={nextTheme} title="Theme">
+            <Icon name={theme === 'dark' ? 'moon' : 'sun'} />
+            {theme === 'auto' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'}
+          </button>
+          <div className="muted small side-meta">
+            <span title={`Backend ${client.base}`}>{hostOf(client.base)}</span>
+            <span className="version" title={`Dashboard ${APP_VERSION} · Backend ${meta?.version ?? '…'}`}>
+              v{APP_VERSION}
+              {meta?.version && meta.version !== APP_VERSION ? ` · API v${meta.version}` : ''}
+            </span>
+          </div>
+          <button type="button" className="link small" onClick={onDisconnect}>Disconnect</button>
+        </div>
+      </nav>
+    </>
+  );
+}
+
 export default function App() {
   const [connection, setConnection] = useState(loadConnection);
   const [meta, setMeta] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [theme, nextTheme] = useTheme();
   const route = useRoute();
   const client = useMemo(() => (connection ? createClient(connection) : null), [connection]);
 
@@ -49,28 +115,33 @@ export default function App() {
   if (!client) return <Connect onConnect={connect} />;
 
   let page;
+  let current = null;
   if (route[0] === 'new') page = <ServerForm client={client} meta={meta} />;
   else if (route[0] === 'servers' && route[1]) {
-    page = <ServerDetail key={route[1]} client={client} meta={meta} id={Number(route[1])} tab={route[2] ?? 'overview'} />;
+    current = Number(route[1]);
+    page = <ServerDetail key={route[1]} client={client} meta={meta} id={current} tab={route[2] ?? 'overview'} />;
   } else page = <ServerList client={client} />;
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <a className="brand" href="#/">
-          <img src="/favicon.svg" alt="" width="22" height="22" />
-          <span>Travian Bot Control</span>
-        </a>
-        <div className="topbar-right">
-          <span className="muted small" title={`Backend ${client.base}`}>{hostOf(client.base)}</span>
-          <span className="version" title={`Dashboard ${APP_VERSION} · Backend ${meta?.version ?? '…'}`}>
-            v{APP_VERSION}
-            {meta?.version && meta.version !== APP_VERSION ? ` · API v${meta.version}` : ''}
-          </span>
-          <button type="button" className="btn ghost" onClick={disconnect}>Disconnect</button>
-        </div>
-      </header>
-      <main className="content">{page}</main>
+    <div className="shell">
+      <Sidebar
+        client={client}
+        meta={meta}
+        current={current}
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onDisconnect={disconnect}
+        theme={theme}
+        nextTheme={nextTheme}
+      />
+      <div className="main">
+        <header className="mobilebar">
+          <button type="button" className="icon-btn" aria-label="Open menu" onClick={() => setMenuOpen(true)}><Icon name="menu" size={20} /></button>
+          <a className="brand" href="#/"><img src="/favicon.svg" alt="" width="22" height="22" /><span>Travian Bot</span></a>
+          <span className="version">v{APP_VERSION}</span>
+        </header>
+        <main className="content">{page}</main>
+      </div>
     </div>
   );
 }

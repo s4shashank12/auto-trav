@@ -18,7 +18,17 @@ export function isRaidableOasis(tile) {
 export const isAutoFarmList = (list, cfg) => list.name.startsWith(cfg.raid.listPrefix);
 
 // Unit a village trains in building `gid`: its override if it has one, else the default.
-export const trainingUnit = (village, gid, cfg) => cfg.train.overrides[village.name]?.[gid] ?? cfg.train.units[gid];
+// "none" (in either) means the building trains nothing.
+export function trainingUnit(village, gid, cfg) {
+  const unit = cfg.train.overrides[village.name]?.[gid] ?? cfg.train.units[gid];
+  return unit && unit !== 'none' ? unit : null;
+}
+
+// Buildings (gids) a village may train in: the defaults plus any its overrides add.
+export const trainingBuildings = (village, cfg) => [...new Set([
+  ...Object.keys(cfg.train.units),
+  ...Object.keys(cfg.train.overrides[village.name] ?? {}),
+])].map(Number);
 
 // Village that takes reinforcements: the configured one, else the capital.
 export const reinforceTarget = (villages, cfg) => (cfg.reinforce.target

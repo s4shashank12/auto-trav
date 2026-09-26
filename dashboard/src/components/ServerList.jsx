@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   hostOf, timeAgo, timeUntil, usePoll,
 } from '../util.js';
-import StatusBadge from './StatusBadge.jsx';
+import { Icon, StatTile, StatusBadge } from './ui.jsx';
 
 function summary(snapshot) {
   const villages = snapshot?.villages ?? [];
@@ -32,8 +32,11 @@ export default function ServerList({ client }) {
   return (
     <section>
       <div className="page-head">
-        <h1>Servers</h1>
-        <a className="btn primary" href="#/new">Add server</a>
+        <div>
+          <h1>Servers</h1>
+          <p className="muted small">Every Travian account this backend plays.</p>
+        </div>
+        <a className="btn primary" href="#/new"><Icon name="plus" /> Add server</a>
       </div>
       {error && <p className="error">{error.message}</p>}
       {loading && !servers && <p className="muted">Loading…</p>}
@@ -54,11 +57,11 @@ export default function ServerList({ client }) {
               </div>
               <p className="muted small">{hostOf(s.url)} · {s.username}</p>
               {s.statusMessage && <p className={`small ${s.status === 'error' || s.status === 'captcha' ? 'error' : 'muted'}`}>{s.statusMessage}</p>}
-              <dl className="stats">
-                <div><dt>Villages</dt><dd>{sum.villages || '—'}</dd></div>
-                <div><dt>Population</dt><dd>{sum.pop ? sum.pop.toLocaleString() : '—'}</dd></div>
-                <div><dt>Raids out</dt><dd>{sum.targets ? `${sum.running}/${sum.targets}` : '—'}</dd></div>
-              </dl>
+              <div className="kpis mini">
+                <StatTile label="Villages" value={sum.villages || '—'} />
+                <StatTile label="Population" value={sum.pop || '—'} />
+                <StatTile label="Oases raided" value={sum.targets ? `${sum.running}/${sum.targets}` : '—'} />
+              </div>
               <p className="muted small">
                 Last round {timeAgo(s.lastPassAt)}
                 {s.nextRunAt && s.enabled ? ` · next ${timeUntil(s.nextRunAt)}` : ''}
@@ -66,6 +69,7 @@ export default function ServerList({ client }) {
               </p>
               <div className="row">
                 <button type="button" className={`btn ${s.enabled ? '' : 'primary'}`} disabled={busy === s.id} onClick={() => toggle(s)}>
+                  <Icon name={s.enabled ? 'stop' : 'play'} />
                   {s.enabled ? 'Stop' : 'Start'}
                 </button>
                 <a className="btn ghost" href={`#/servers/${s.id}`}>Open</a>

@@ -1,32 +1,41 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useConfigDraft } from '../useConfigDraft.js';
 import {
   hostOf, navigate, timeAgo, timeUntil, usePoll,
 } from '../util.js';
+import Army from './Army.jsx';
+import BuildPlan from './BuildPlan.jsx';
 import Inactives from './Inactives.jsx';
 import Logs from './Logs.jsx';
 import Overview from './Overview.jsx';
+import Raiding from './Raiding.jsx';
 import Screenshots from './Screenshots.jsx';
 import ServerForm from './ServerForm.jsx';
 import Settings from './Settings.jsx';
-import StatusBadge from './StatusBadge.jsx';
+import {
+  Icon, Menu, SaveBar, StatusBadge,
+} from './ui.jsx';
 
 const TABS = [
-  ['overview', 'Overview'],
-  ['inactives', 'Inactive players'],
-  ['logs', 'Logs'],
-  ['settings', 'Settings'],
-  ['screenshots', 'Screenshots'],
-  ['account', 'Account'],
+  ['overview', 'Overview', 'castle'],
+  ['army', 'Army', 'foot'],
+  ['buildings', 'Buildings', 'hammer'],
+  ['raiding', 'Raiding', 'target'],
+  ['inactives', 'Inactive players', 'target'],
+  ['logs', 'Logs', 'book'],
+  ['settings', 'Settings', 'bolt'],
+  ['account', 'Account', 'lock'],
 ];
 
-const ACTION_LABELS = {
-  build: 'Build now',
-  train: 'Train now',
-  raid: 'Raid wave now',
-  'farm-setup': 'Farm list setup',
-  villages: 'Refresh villages',
-  world: 'Import world data',
-  'inactive-raid': 'Raid inactives now',
+const ACTIONS = {
+  villages: ['Refresh villages', 'Read villages and population'],
+  build: ['Build now', 'Queue jobs in small villages'],
+  train: ['Research & train now', 'Top up training queues'],
+  research: ['Research now', 'Start missing Academy research'],
+  raid: ['Send a raid wave', 'From the oasis farm lists'],
+  'farm-setup': ['Set up farm lists', 'Find and add empty oases'],
+  world: ['Import world data', 'For inactive player detection'],
+  'inactive-raid': ['Raid inactive players', 'From the inactive farm lists'],
 };
 
 export default function ServerDetail({
@@ -36,6 +45,15 @@ export default function ServerDetail({
   const { data: server, error } = usePoll(() => client.server(id), 5000, [client, id, tick]);
   const [notice, setNotice] = useState(null);
   const refresh = () => setTick((t) => t + 1);
+  const draft = useConfigDraft(client, server, meta?.defaults, refresh);
+
+  // Unsaved settings survive switching tabs; warn before leaving the page with them.
+  useEffect(() => {
+    if (!draft.dirty) return undefined;
+    const warn = (e) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [draft.dirty]);
 
   async function run(fn, message) {
     setNotice(null);
@@ -55,11 +73,18 @@ export default function ServerDetail({
   }
 
   if (error && !server) return <p className="error">{error.message}</p>;
-  if (!server) return <p className="muted">Loading…</p>;
+  if (!server || !meta) return <p className="muted">Loading…</p>;
+
+  const actions = (meta.actions ?? Object.keys(ACTIONS)).map((a) => ({
+    key: a,
+    label: ACTIONS[a]?.[0] ?? a,
+    hint: ACTIONS[a]?.[1],
+    onSelect: () => run(() => client.action(id, a), `${ACTIONS[a]?.[0] ?? a}: started. Follow it in Logs.`),
+  }));
+  const editorProps = { draft, server };
 
   return (
-    <section>
-      <a className="muted small back" href="#/">← All servers</a>
+    <section className="server-page">
       <div className="page-head">
         <div>
           <h1>{server.name} <StatusBadge status={server.status} /></h1>
@@ -67,42 +92,39 @@ export default function ServerDetail({
             <a href={server.url} target="_blank" rel="noreferrer">{hostOf(server.url)}</a> · {server.username}
             {' · '}last round {timeAgo(server.lastPassAt)}
             {server.enabled && server.nextRunAt ? ` · next ${timeUntil(server.nextRunAt)}` : ''}
-            {server.config?.dryRun ? ' · dry run' : ''}
+            {draft.value('dryRun') ? <span className="tag warn">dry run</span> : null}
           </p>
           {server.statusMessage && <p className={`small ${['error', 'captcha'].includes(server.status) ? 'error' : 'muted'}`}>{server.statusMessage}</p>}
         </div>
         <div className="row">
+          <Menu label="Run now" icon="bolt" items={actions} />
           {server.enabled
-            ? <button type="button" className="btn" onClick={() => run(() => client.stop(id), 'Stopping after the current round…')}>Stop</button>
-            : <button type="button" className="btn primary" onClick={() => run(() => client.start(id), 'Started.')}>Start</button>}
+            ? <button type="button" className="btn" onClick={() => run(() => client.stop(id), 'Stopping after the current round…')}><Icon name="stop" /> Stop</button>
+            : <button type="button" className="btn primary" onClick={() => run(() => client.start(id), 'Started.')}><Icon name="play" /> Start</button>}
         </div>
-      </div>
-
-      <div className="row wrap actions">
-        {(meta?.actions ?? Object.keys(ACTION_LABELS)).map((a) => (
-          <button
-            key={a}
-            type="button"
-            className="btn small"
-            onClick={() => run(() => client.action(id, a), `${ACTION_LABELS[a] ?? a}: queued. Follow it in Logs.`)}
-          >
-            {ACTION_LABELS[a] ?? a}
-          </button>
-        ))}
       </div>
       {notice && <p className="notice">{notice}</p>}
 
-      <nav className="tabs">
-        {TABS.map(([key, label]) => (
-          <a key={key} href={`#/servers/${id}/${key}`} className={tab === key ? 'active' : ''}>{label}</a>
+      <nav className="tabs" aria-label="Sections">
+        {TABS.map(([key, label, icon]) => (
+          <a key={key} href={`#/servers/${id}/${key}`} className={tab === key ? 'active' : ''} aria-current={tab === key ? 'page' : undefined}>
+            <Icon name={icon} size={14} />{label}
+          </a>
         ))}
       </nav>
 
-      {tab === 'overview' && <Overview snapshot={server.snapshot} config={server.effectiveConfig} />}
+      {tab === 'overview' && <Overview server={server} config={server.effectiveConfig} />}
+      {tab === 'army' && <Army {...editorProps} />}
+      {tab === 'buildings' && <BuildPlan {...editorProps} />}
+      {tab === 'raiding' && <Raiding {...editorProps} />}
       {tab === 'inactives' && <Inactives client={client} server={server} onChanged={refresh} />}
-      {tab === 'logs' && <Logs client={client} id={id} />}
-      {tab === 'settings' && <Settings client={client} meta={meta} server={server} onSaved={refresh} />}
-      {tab === 'screenshots' && <Screenshots client={client} id={id} />}
+      {tab === 'logs' && (
+        <div className="stack">
+          <Logs client={client} id={id} />
+          <Screenshots client={client} id={id} />
+        </div>
+      )}
+      {tab === 'settings' && <Settings meta={meta} draft={draft} />}
       {tab === 'account' && (
         <div className="stack">
           <ServerForm client={client} server={server} onSaved={() => { setNotice('Saved.'); refresh(); }} />
@@ -113,6 +135,8 @@ export default function ServerDetail({
           </div>
         </div>
       )}
+
+      <SaveBar draft={draft} />
     </section>
   );
 }
