@@ -85,10 +85,17 @@ Only the `deploy/` folder is needed on the VM. The backend image comes from GHCR
 
 ### 1. Create the VM
 
-Chromium needs memory: plan on about 300 MB, plus a few hundred MB per Travian account.
-- **e2-small (2 GB):** fine for one or two accounts.
-- **e2-medium (4 GB):** for more accounts.
-- **e2-micro:** too small.
+The backend is built for small VMs:
+- the image is about 200 MB to download (Node plus Chromium's headless shell only);
+- Chromium only runs during a round and closes about a minute later, without loading images.
+
+A round peaks around 450 MB and the backend idles at about 60 MB; Postgres, Caddy and
+Watchtower add about 60 MB more. So:
+- **e2-micro (1 GB, free tier):** fine for one or two accounts, with 2 GB of swap (below).
+- **e2-small (2 GB):** comfortable for a few accounts.
+
+Memory limits (`BACKEND_MEM_LIMIT`, `DB_MEM_LIMIT` in `.env`) keep the bot from starving
+other programs on the VM.
 
 From Cloud Shell, or anywhere with `gcloud`:
 
@@ -112,13 +119,18 @@ Notes:
 - If `allow-web` already exists (the default `default-allow-http`/`https` rules do the same
   job), skip that command.
 
-### 2. Install Docker
+### 2. Install Docker (and swap on a 1 GB VM)
 
 ```bash
 gcloud compute ssh travian-bot --zone=us-central1-a
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER && newgrp docker
 docker compose version          # Docker Compose v2 is included
+
+# 1 GB VMs: 2 GB of swap absorbs the short peaks of a round.
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
 ### 3. Get the deploy files and configure them
@@ -191,8 +203,19 @@ docker compose ps                         # backend "healthy", db "healthy", cad
 curl https://<API_DOMAIN>/api/health      # {"ok":true,"version":"0.2.17"}
 ```
 
+**Ports 80 or 443 already in use** (another web server on the VM)? Use the `https-port`
+profile instead: set `COMPOSE_PROFILES=local-db,https-port` and `API_PORT=15678` (any port
+open in the firewall).
+- Let's Encrypt can only verify a domain on ports 80/443, so Caddy uses its own certificate
+  there, valid for a year and renewed automatically.
+- Before the first connection, open `https://<API_DOMAIN>:15678/api/health` in each browser you
+  use and accept the certificate warning.
+- In the dashboard, the backend URL is then `https://<API_DOMAIN>:15678`.
+- If the other web server already has HTTPS for a domain, a cleaner option is to proxy a
+  hostname or path there to `127.0.0.1:8080`, and run without Caddy.
+
 Then open the dashboard on Firebase:
-1. Enter `https://<API_DOMAIN>` and your `ADMIN_TOKEN`.
+1. Enter `https://<API_DOMAIN>` (plus `:API_PORT` with `https-port`) and your `ADMIN_TOKEN`.
 2. Add your Travian accounts (game world URL, username, password).
 3. Press Start.
 
