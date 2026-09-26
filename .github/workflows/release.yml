@@ -78,7 +78,9 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     env:
-      HAS_FIREBASE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' && vars.FIREBASE_PROJECT_ID != '' }}
+      # The project id may be saved as a variable or, by mistake, as a secret; both work.
+      FIREBASE_PROJECT: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
+      HAS_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
     defaults:
       run:
         working-directory: dashboard
@@ -93,22 +95,32 @@ jobs:
         env:
           VITE_APP_VERSION: ${{ needs.version.outputs.version }}
           VITE_API_URL: ${{ vars.API_URL }}
-      - name: Firebase not configured
-        if: env.HAS_FIREBASE != 'true'
-        run: echo "::notice::Set the FIREBASE_SERVICE_ACCOUNT secret and FIREBASE_PROJECT_ID variable to deploy the dashboard."
+      - name: Check Firebase settings
+        id: firebase
+        run: |
+          missing=""
+          [ "$HAS_SERVICE_ACCOUNT" = true ] || missing="the secret FIREBASE_SERVICE_ACCOUNT"
+          [ -n "$FIREBASE_PROJECT" ] || missing="${missing:+$missing and }the variable FIREBASE_PROJECT_ID"
+          if [ -z "$missing" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            msg="Dashboard not deployed to Firebase Hosting. Missing: $missing (repository Settings -> Secrets and variables -> Actions)."
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: FirebaseExtended/action-hosting-deploy@v0
-        if: env.HAS_FIREBASE == 'true'
+        if: steps.firebase.outputs.deploy == 'true'
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          projectId: ${{ env.FIREBASE_PROJECT }}
           entryPoint: dashboard
           channelId: live
       - name: Keep the last ${{ env.KEEP_BUILDS }} Hosting releases
-        if: env.HAS_FIREBASE == 'true'
+        if: steps.firebase.outputs.deploy == 'true'
         env:
           SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          SITE: ${{ vars.FIREBASE_SITE || vars.FIREBASE_PROJECT_ID }}
+          SITE: ${{ vars.FIREBASE_SITE || env.FIREBASE_PROJECT }}
         run: node ../scripts/firebase-keep-releases.mjs
 
   cleanup:
