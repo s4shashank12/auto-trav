@@ -21,6 +21,16 @@ export function wantedResearch(village, cfg) {
   return [...wanted].filter((u) => /^t[2-9]$/.test(u));
 }
 
+// A unit that shows up in a village's training form is researched there (even if the village
+// has no Academy any more). Training calls this so research never waits for those.
+export async function noteResearched(game, did, unit) {
+  const state = (await game.store?.get(STATE)) ?? {};
+  const done = state.done ?? {};
+  if (done[did]?.includes(unit)) return;
+  done[did] = [...(done[did] ?? []), unit];
+  await game.store?.set(STATE, { ...state, done });
+}
+
 // Researches what each village still lacks. Returns a summary per village that had work.
 export async function researchUnits(game, villages, cfg) {
   const state = (await game.store?.get(STATE)) ?? {};

@@ -1,6 +1,7 @@
 import {
   canDevelop, reinforceTarget, trainingBuildings, trainingUnit,
 } from './rules.js';
+import { noteResearched } from './research.js';
 
 const RESOURCES = ['wood', 'clay', 'iron', 'crop'];
 const REINFORCE_STATE = 'reinforcements';
@@ -74,6 +75,7 @@ export async function trainTroops(game, villages, cfg) {
       if (!unit) continue;
       const info = await game.trainingInfo(village.did, gid, unit);
       if (!info) continue;
+      await noteResearched(game, village.did, unit);
       const building = BUILDING_NAMES[gid] ?? `Building ${gid}`;
       const crop = info.production.crop;
       if (crop < cropLow) {
