@@ -8,15 +8,18 @@ export const ACTIONS = ['villages', 'build', 'train', 'raid', 'farm-setup', 'wor
 
 // Plays one Travian account (a "server" row): rounds on a timer while running, plus one-off
 // actions from the dashboard. Everything that touches the game goes through exclusive(), so a
-// round and an action never drive the browser at the same time.
+// round and an action never drive the browser at the same time. The browser session only lives
+// for a round or an action; between them the worker holds no browser memory at all.
 export class BotWorker {
   constructor(serverId, {
-    repo, pool, getBrowser, dataDir,
+    repo, pool, acquireBrowser, releaseBrowser, dataDir,
   }) {
     this.id = serverId;
     this.repo = repo;
     this.pool = pool;
-    this.getBrowser = getBrowser;
+    this.acquireBrowser = acquireBrowser;
+    this.releaseBrowser = releaseBrowser;
+    this.holdsBrowser = false;
     this.dataDir = dataDir;
     this.name = `server ${serverId}`;
     this.status = 'stopped';
@@ -45,28 +48,37 @@ export class BotWorker {
     return run;
   }
 
-  // Opens (or reuses) the browser session for this account with the latest settings.
+  // Opens (or reuses) the browser session for this account with the latest settings. The Runner
+  // outlives sessions, so its wave and training timers carry over from round to round.
   async session() {
     const server = await this.repo.getServer(this.id);
     if (!server) throw new Error('Server no longer exists');
     this.name = server.name;
     const cfg = resolveConfig(server.config);
     if (!this.game || this.game.browser?.isConnected?.() === false) {
-      await this.closeSession();
+      await this.closeSession({ keepRunner: true });
       const creds = await this.repo.getCredentials(this.id);
+      const browser = await this.acquireBrowser();
+      this.holdsBrowser = true;
       this.game = new Travian({
         server: creds.url,
         username: creds.username,
         password: creds.password,
         dryRun: cfg.dryRun,
-        browser: await this.getBrowser(),
+        browser,
         session: pgSession(this.repo, this.id),
         store: pgStore(this.repo, this.id),
         screenshotDir: path.join(this.dataDir, 'screenshots', String(this.id)),
         log: (m) => this.log(m),
       });
-      await this.game.start();
-      this.runner = new Runner(this.game, cfg, { world: pgWorld(this.pool, this.id) });
+      try {
+        await this.game.start();
+      } catch (err) {
+        await this.closeSession({ keepRunner: true });
+        throw err;
+      }
+      if (this.runner) this.runner.game = this.game;
+      else this.runner = new Runner(this.game, cfg, { world: pgWorld(this.pool, this.id) });
     }
     // Settings changes apply from the next round on, keeping the wave and training timers.
     this.game.dryRun = cfg.dryRun;
@@ -74,11 +86,17 @@ export class BotWorker {
     return this.runner;
   }
 
-  async closeSession() {
+  // Closes the browser session. Without keepRunner the Runner goes too (after an error, so the
+  // next round starts clean).
+  async closeSession({ keepRunner = false } = {}) {
     const { game } = this;
     this.game = null;
-    this.runner = null;
+    if (!keepRunner) this.runner = null;
     await game?.close().catch(() => {});
+    if (this.holdsBrowser) {
+      this.holdsBrowser = false;
+      this.releaseBrowser();
+    }
   }
 
   async saveSnapshot() {
@@ -126,6 +144,7 @@ export class BotWorker {
           const runner = await this.session();
           const result = await runner.round();
           await this.saveSnapshot();
+          await this.closeSession({ keepRunner: true });
           return result;
         });
         failures = 0;
@@ -176,7 +195,7 @@ export class BotWorker {
         await this.closeSession();
         throw err;
       } finally {
-        if (!this.running) await this.closeSession();
+        await this.closeSession({ keepRunner: true });
         await this.setStatus(this.running ? previous : 'stopped', null, this.running ? this.nextRunAt : null);
       }
     });

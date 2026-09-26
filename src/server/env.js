@@ -29,6 +29,9 @@ export function loadEnv(env = process.env) {
     headless: !/^(0|false|no)$/i.test(env.HEADLESS ?? ''),
     autostart: !/^(0|false|no)$/i.test(env.AUTOSTART ?? ''),
     eventsRetentionDays: Number(env.EVENTS_RETENTION_DAYS ?? 7),
+    // Chromium is closed after this many idle seconds between rounds (0 = right away).
+    browserIdleSeconds: Math.max(0, Number(env.BROWSER_IDLE_SECONDS ?? 60)),
+    databasePoolMax: Math.max(1, Number(env.DATABASE_POOL_MAX ?? 5)),
     version: env.APP_VERSION ?? 'dev',
   };
 }

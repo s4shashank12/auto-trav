@@ -111,7 +111,7 @@ export function poolOptions(env, read = fs.readFileSync) {
   if (ca && (!mode || mode === 'require')) mode = 'verify-ca';
   if (!mode && cert) mode = 'require';
 
-  const options = { connectionString, max: 10, keepAlive: true };
+  const options = { connectionString, max: env.databasePoolMax ?? 5, keepAlive: true };
   if (!mode || mode === 'disable') return { ...options, ssl: false };
   const ssl = { rejectUnauthorized: mode !== 'require' };
   if (ca) ssl.ca = readPem(ca, read);
