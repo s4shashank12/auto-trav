@@ -340,8 +340,8 @@ changes them per account; only the changed values are stored.
     its home village: the one with the most animals among those it can beat losing at most
     `heroRaid.maxLoss` (25%) health. The loss is estimated from the hero's fighting strength
     against the animals' infantry or cavalry defence (cavalry when it rides a horse), leaving
-    armour out, so it errs on the safe side. `heroRaid.mode` picks a raid (less health lost) or
-    an attack (every animal killed).
+    armour out, so it errs on the safe side. It is always a raid: the game turns any attack on
+    an unoccupied oasis into one.
   - The order goes through the rally point and is only confirmed when the game's confirmation
     shows exactly that: an unoccupied oasis, the right target, the hero alone. When nothing
     qualifies, the map is left alone for half an hour. "Run now → Send hero" (or

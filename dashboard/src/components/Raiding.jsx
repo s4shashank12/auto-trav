@@ -195,8 +195,9 @@ function Hero({
         <div>
           <h3><Icon name="shield" /> Hero</h3>
           <p className="muted small">
-            While the hero is home and healthy it goes on an adventure whenever one is open. Otherwise it clears the unoccupied
-            oasis with the most animals it can beat, judged from its fighting strength against the animals' defence.
+            While the hero is home and healthy it goes on an adventure whenever one is open. Otherwise it raids the unoccupied
+            oasis with the most animals it can beat, judged from its fighting strength against the animals' defence (the game
+            only allows raids on unoccupied oases).
           </p>
         </div>
         <div className="list-card-controls">
@@ -232,13 +233,6 @@ function Hero({
               </span>
             </label>
           ))}
-          <label>
-            <span className="muted small">At the oasis</span>
-            <select value={draft.value('heroRaid.mode') ?? 'raid'} onChange={(e) => draft.change('heroRaid.mode', e.target.value)}>
-              <option value="raid">Raid (loses less health)</option>
-              <option value="attack">Attack (kills every animal)</option>
-            </select>
-          </label>
         </div>
       </div>
       {st && (
@@ -255,7 +249,7 @@ function Hero({
           {action?.type === 'adventure' && <p className="small st st-good"><Icon name="play" size={12} /> Sent on an adventure at ({action.x}|{action.y})</p>}
           {action?.type === 'oasis' && (
             <p className="small st st-good">
-              <Icon name="target" size={12} /> Sent to {action.mode === 'attack' ? 'attack' : 'raid'} the oasis at ({action.x}|{action.y}): {action.animals} (about {action.loss}% health)
+              <Icon name="target" size={12} /> Sent to raid the oasis at ({action.x}|{action.y}): {action.animals} (about {action.loss}% health)
             </p>
           )}
           {!action && st.note && <p className="small st st-muted"><Icon name="pause" size={12} /> {st.note}</p>}

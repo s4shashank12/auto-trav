@@ -26,22 +26,23 @@ export function tileAnimals(tile) {
     .filter((a) => a.count > 0);
 }
 
-// Estimated health the hero loses clearing `animals` (percent, 100 = it would die), from the
-// game's battle formula: the winner loses (defence / attack)^1.5 of its strength in a normal
-// attack, and x / (1 + x) of that in a raid. A mounted hero meets the animals' cavalry defence.
-// Armour and other bonuses are left out, so the estimate errs on the safe side.
-export function estimateLoss(animals, { power, mounted }, mode = 'raid') {
+// Estimated health the hero loses raiding `animals` (percent, 100 = it would die), from the
+// game's battle formula for a raid: with x = (defence / attack)^1.5 the winner loses x / (1 + x)
+// of its strength. (The game turns any attack on an unoccupied oasis into a raid.) A mounted hero
+// meets the animals' cavalry defence. Armour and other bonuses are left out, so the estimate errs
+// on the safe side.
+export function estimateLoss(animals, { power, mounted }) {
   if (!power) return 100;
   const defence = animals.reduce((n, a) => n + a.count * ((mounted ? ANIMALS[a.id]?.cav : ANIMALS[a.id]?.inf) ?? 1000), 0);
   if (!defence) return 0;
   if (defence >= power) return 100;
   const x = (defence / power) ** 1.5;
-  return Math.ceil(100 * (mode === 'attack' ? x : x / (1 + x)));
+  return Math.ceil((100 * x) / (1 + x));
 }
 
 // The oasis to clear: most animals first, then most experience, then nearest.
 export function pickOasis(tiles, from, hero, cfg) {
-  const { radius, maxLoss, mode } = cfg.heroRaid;
+  const { radius, maxLoss } = cfg.heroRaid;
   return tiles
     .filter((t) => t.title === '{k.fo}' && t.uid == null)
     .map((t) => {
@@ -53,7 +54,7 @@ export function pickOasis(tiles, from, hero, cfg) {
         animals,
         count: animals.reduce((n, a) => n + a.count, 0),
         experience: animals.reduce((n, a) => n + a.count * (ANIMALS[a.id]?.upkeep ?? 0), 0),
-        loss: estimateLoss(animals, hero, mode),
+        loss: estimateLoss(animals, hero),
       };
     })
     .filter((o) => o.count > 0 && o.dist <= radius && o.loss <= maxLoss && o.loss < hero.health)
@@ -106,12 +107,12 @@ export async function sendHero(game, cfg, { force = false } = {}) {
     await game.store?.set(STATE, { quietUntil: Date.now() + QUIET_MS, note });
     return { ...summary, note, nextLookAt: new Date(Date.now() + QUIET_MS).toISOString() };
   }
-  await game.sendHeroTo(from.id, oasis, cfg.heroRaid.mode);
-  game.log(`Hero: ${cfg.heroRaid.mode === 'attack' ? 'attacking' : 'raiding'} the oasis at (${oasis.x}|${oasis.y}), ${oasis.dist.toFixed(1)} fields away: ${describe(oasis.animals)} (about ${oasis.loss}% health).`);
+  await game.sendHeroTo(from.id, oasis);
+  game.log(`Hero: raiding the oasis at (${oasis.x}|${oasis.y}), ${oasis.dist.toFixed(1)} fields away: ${describe(oasis.animals)} (about ${oasis.loss}% health).`);
   return {
     ...summary,
     action: {
-      type: 'oasis', x: oasis.x, y: oasis.y, animals: describe(oasis.animals), loss: oasis.loss, mode: cfg.heroRaid.mode,
+      type: 'oasis', x: oasis.x, y: oasis.y, animals: describe(oasis.animals), loss: oasis.loss,
     },
   };
 }

@@ -29,8 +29,9 @@ test('validateConfig accepts known settings and rejects the rest', () => {
 });
 
 test('validateConfig checks choices and ranges', () => {
-  assert.doesNotThrow(() => validateConfig({ heroRaid: { mode: 'attack', radius: 20 } }));
-  assert.throws(() => validateConfig({ heroRaid: { mode: 'siege' } }), /raid, attack/);
+  assert.doesNotThrow(() => validateConfig({ heroRaid: { radius: 20 } }));
+  // heroRaid.mode is gone (oases can only be raided): old saved configs drop it instead of failing.
+  assert.deepEqual(validateConfig({ heroRaid: { mode: 'attack', radius: 20 } }), { heroRaid: { radius: 20 } });
   assert.throws(() => validateConfig({ heroRaid: { maxLoss: 100 } }), /between 1 and 99/);
   assert.throws(() => validateConfig({ smithy: { maxLevel: 25 } }), /between 1 and 20/);
 });

@@ -76,16 +76,16 @@ export const DEFAULT_CONFIG = {
   },
 
   // The hero's own outings, checked every round while it is home: an adventure whenever one is
-  // open (normal before hard, nearest first), otherwise the unoccupied oasis with the most animals
-  // within `radius` fields of its home village that it can clear losing at most `maxLoss` health
-  // (estimated from its fighting strength and the animals' defence).
+  // open (normal before hard, nearest first), otherwise a raid on the unoccupied oasis with the
+  // most animals within `radius` fields of its home village that it can clear losing at most
+  // `maxLoss` health (estimated from its fighting strength and the animals' defence). The game
+  // only allows raids on unoccupied oases.
   heroRaid: {
     adventures: true, // adventures come first
     oases: true, // then oases with animals
     radius: 15, // fields from the hero's home village
     minHealth: 50, // the hero only leaves with at least this much health (%)
     maxLoss: 25, // skip oases that would cost it more health than this (%)
-    mode: 'raid', // 'raid' or 'attack' (an attack kills every animal, a raid loses less health)
   },
 
   reinforce: {
@@ -199,7 +199,6 @@ export const CONFIG_FIELDS = [
   { section: 'Hero', path: 'heroRaid.radius', type: 'number', label: 'Oases within (fields)' },
   { section: 'Hero', path: 'heroRaid.minHealth', type: 'number', label: 'Leave with at least (% health)' },
   { section: 'Hero', path: 'heroRaid.maxLoss', type: 'number', label: 'Lose at most (% health per oasis)' },
-  { section: 'Hero', path: 'heroRaid.mode', type: 'string', label: 'Oasis mission', help: 'raid or attack' },
   { section: 'Reinforcement', path: 'reinforce.target', type: 'string', label: 'Target village', help: 'Empty means the capital.' },
   { section: 'Reinforcement', path: 'reinforce.cropLow', type: 'number', label: 'Reinforce below (crop/h)' },
   { section: 'Reinforcement', path: 'reinforce.cropTarget', type: 'number', label: 'Until back to (crop/h)' },

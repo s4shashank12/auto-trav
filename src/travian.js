@@ -694,11 +694,12 @@ export class Travian {
     return { arrivalIn: res.result?.troops?.[0]?.arrivalIn ?? null };
   }
 
-  // Sends the hero alone from village `did` to raid (or attack) the unoccupied oasis at (x|y),
-  // through the rally point. The confirmation page must show exactly that before it is confirmed:
-  // the raid type, the target, only the hero, from this village, against an unoccupied oasis.
-  async sendHeroTo(did, { x, y }, mode = 'raid') {
-    const eventType = mode === 'attack' ? '3' : '4';
+  // Sends the hero alone from village `did` to raid the unoccupied oasis at (x|y), through the
+  // rally point (the game only allows raids there: it turns an attack into one). The confirmation
+  // page must show exactly that before it is confirmed: a raid, the target, only the hero, from
+  // this village, against an unoccupied oasis.
+  async sendHeroTo(did, { x, y }) {
+    const eventType = '4';
     await this.goto(`/build.php?newdid=${did}&id=${RALLY_POINT}&gid=16&tt=2`);
     const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
     if (active !== did) throw new Error(`Refusing to send the hero: village ${active} is active, expected ${did}`);

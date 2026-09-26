@@ -229,10 +229,10 @@ test('hero: adventures first, else the oasis with the most animals it can safely
   assert.ok(estimateLoss([{ id: 33, count: 5 }], hero) <= 1);
   // 20 elephants: 10400 cavalry defence beats the hero.
   assert.equal(estimateLoss([{ id: 40, count: 20 }], hero), 100);
-  // Infantry defence is used on foot, and an attack costs more than a raid.
+  // Infantry defence is used on foot: 20 bears are 2800 against infantry, 4000 against cavalry.
   const bears = [{ id: 37, count: 20 }];
   assert.ok(estimateLoss(bears, { ...hero, mounted: false }) < estimateLoss(bears, hero));
-  assert.ok(estimateLoss(bears, hero, 'attack') > estimateLoss(bears, hero, 'raid'));
+  assert.equal(estimateLoss(bears, hero), Math.ceil((100 * 0.4 ** 1.5) / (1 + 0.4 ** 1.5)), 'raid losses');
 
   const tiles = [
     oasis(3, 0, animal(31, 4)), // 4 rats, near
@@ -261,7 +261,7 @@ test('hero: adventures first, else the oasis with the most animals it can safely
     }),
     heroPower: async () => ({ power: 10_000, mounted: true }),
     startAdventure: async (n) => { calls.push(['adventure', n]); return {}; },
-    sendHeroTo: async (did, o, mode) => { calls.push(['oasis', did, o.x, o.y, mode]); },
+    sendHeroTo: async (did, o) => { calls.push(['oasis', did, o.x, o.y]); },
     mapTiles: async () => new Map(tiles.map((t) => [`${t.position.x}|${t.position.y}`, t])),
     pause: async () => {},
   };
@@ -269,7 +269,7 @@ test('hero: adventures first, else the oasis with the most animals it can safely
   adventures = [];
   const out = await sendHero(game, c);
   assert.equal(out.action.type, 'oasis');
-  assert.deepEqual(calls, [['adventure', 9], ['oasis', 5, 10, 0, 'raid']]);
+  assert.deepEqual(calls, [['adventure', 9], ['oasis', 5, 10, 0]]);
 
   const weak = { ...game, heroPower: async () => ({ power: 50, mounted: false }) };
   assert.match((await sendHero(weak, c)).note, /no oasis/);

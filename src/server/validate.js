@@ -8,7 +8,10 @@ const MAP_PATHS = new Set(['train.units', 'train.overrides', 'research.overrides
 const kind = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
 
 // Settings limited to a few values, and numbers limited to a range.
-const CHOICES = { 'heroRaid.mode': ['raid', 'attack'] };
+const CHOICES = {};
+// Settings that no longer exist: dropped from saved configs instead of refused, so a config saved
+// before they went can still be saved. (heroRaid.mode: the game only allows raids on oases.)
+const REMOVED = new Set(['heroRaid.mode']);
 const RANGES = {
   'heroRaid.radius': [1, 100], 'heroRaid.minHealth': [1, 100], 'heroRaid.maxLoss': [1, 99], 'smithy.maxLevel': [1, 20],
 };
@@ -18,6 +21,10 @@ export function validateConfig(overrides, defaults = DEFAULT_CONFIG, prefix = ''
   if (kind(overrides) !== 'object') throw new ValidationError(`${prefix || 'config'} must be an object`);
   for (const [key, value] of Object.entries(overrides)) {
     const pathName = prefix ? `${prefix}.${key}` : key;
+    if (REMOVED.has(pathName)) {
+      delete overrides[key];
+      continue;
+    }
     if (!(key in defaults)) throw new ValidationError(`Unknown setting "${pathName}"`);
     const expected = kind(defaults[key]);
     if (kind(value) !== expected) throw new ValidationError(`"${pathName}" must be ${expected === 'array' ? 'an array' : `a ${expected}`}`);
