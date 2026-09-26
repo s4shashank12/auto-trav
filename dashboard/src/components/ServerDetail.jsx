@@ -32,6 +32,7 @@ const ACTIONS = {
   build: ['Build now', 'Queue jobs in small villages'],
   train: ['Research & train now', 'Top up training queues'],
   research: ['Research now', 'Start missing Academy research'],
+  smithy: ['Improve in Smithy', 'Start the next weapons and armour upgrade'],
   raid: ['Send a raid wave', 'From the oasis farm lists'],
   'farm-setup': ['Set up farm lists', 'Find and add empty oases'],
   'farm-rebuild': ['Rebuild farm lists', 'Empty the bot\'s lists and fill them again'],

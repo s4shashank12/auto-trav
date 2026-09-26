@@ -30,7 +30,7 @@ dashboard shows and manages them.
   appear by name (for your tribe), never as codes. From it you can:
   - add naitra accounts on any game world, start and stop them;
   - see every village at a glance: build queue, training, research and raids;
-  - **Army**: drag units onto a table of training buildings and research lists. The top row is
+  - **Army**: drag units onto a table of training buildings, research lists and Smithy lists. The top row is
     the default for every village; drop onto a village's row to give it its own choice. Tapping
     a unit and then a slot works too (handy on phones);
   - **Buildings**: reorder the build list by dragging, drag buildings in from a catalog, set how
@@ -324,6 +324,15 @@ changes them per account; only the changed values are stored.
     the research list (the default list, or a village's own). One unit at a time, as soon as the
     Academy allows it, never with the paid or video buttons.
   - Units waiting on buildings are shown with what they need (e.g. "needs Stable Level 10").
+- **Smithy:**
+  - After research and before training, each village's Smithy improves the units the village
+    trains, plus any on the Smithy list (the default list, or a village's own): one upgrade at a
+    time, lowest level first, up to `smithy.maxLevel` (20) and never above the Smithy's level.
+    Only the plain green Improve button's request is used, never the gold or video buttons.
+  - A village is looked at again when its upgrade ends, hourly while it is short of resources,
+    and every 6 hours once everything is at the cap. "Run now → Improve in Smithy" checks every
+    village at once; `node src/cli.js smithy` does the same. Switch it off under Settings
+    ("Improve units in the Smithy").
 - **Reinforcement:** a village whose crop would drop under 200/h stops training and sends
   troops to the capital (or `reinforce.target`), until it is back to 600/h. That happens only
   while the target keeps at least 2,000/h.

@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG = {
     reinforce: true, // move troops to the reinforcement target when crop runs low
     raid: true, // send farm list waves
     research: true, // research units in the Academy (see research below)
+    smithy: true, // improve units in the Smithy (see smithy below)
   },
 
   build: {
@@ -61,6 +62,16 @@ export const DEFAULT_CONFIG = {
     fromTraining: true,
     units: [], // e.g. ["t3", "t6"]
     overrides: {}, // per village name: a list that replaces the default one
+  },
+
+  // Smithy upgrades, checked with training. A village improves its list (its override, else the
+  // default list) plus, with fromTraining, the units it is set to train: one upgrade at a time,
+  // lowest level first, up to maxLevel (and never above the Smithy's own level).
+  smithy: {
+    fromTraining: true,
+    units: [], // e.g. ["t3", "t6"]
+    overrides: {}, // per village name: a list that replaces the default one
+    maxLevel: 20,
   },
 
   reinforce: {
@@ -145,6 +156,7 @@ export const CONFIG_FIELDS = [
   { section: 'General', path: 'features.reinforce', type: 'boolean', label: 'Reinforce when crop is low' },
   { section: 'General', path: 'features.raid', type: 'boolean', label: 'Raid oases' },
   { section: 'General', path: 'features.research', type: 'boolean', label: 'Research units in the Academy' },
+  { section: 'General', path: 'features.smithy', type: 'boolean', label: 'Improve units in the Smithy' },
   { section: 'Building', path: 'build.populationLimit', type: 'number', label: 'Population limit', help: 'Villages at or above this are not built in.' },
   { section: 'Building', path: 'build.queueMax', type: 'number', label: 'Queue length', help: '3 for Romans with Plus, 2 without.' },
   { section: 'Building', path: 'build.cropFirstBelow', type: 'number', label: 'Cropland first below (crop/h)' },
@@ -163,6 +175,10 @@ export const CONFIG_FIELDS = [
   { section: 'Research', path: 'research.fromTraining', type: 'boolean', label: 'Research what a village trains' },
   { section: 'Research', path: 'research.units', type: 'json', label: 'Units to research', help: '["t3", "t6"]' },
   { section: 'Research', path: 'research.overrides', type: 'json', label: 'Per-village research', help: '{ "Village": ["t3"] }' },
+  { section: 'Smithy', path: 'smithy.fromTraining', type: 'boolean', label: 'Improve what a village trains' },
+  { section: 'Smithy', path: 'smithy.units', type: 'json', label: 'Units to improve', help: '["t3", "t6"]' },
+  { section: 'Smithy', path: 'smithy.overrides', type: 'json', label: 'Per-village upgrades', help: '{ "Village": ["t3"] }' },
+  { section: 'Smithy', path: 'smithy.maxLevel', type: 'number', label: 'Improve up to level' },
   { section: 'Reinforcement', path: 'reinforce.target', type: 'string', label: 'Target village', help: 'Empty means the capital.' },
   { section: 'Reinforcement', path: 'reinforce.cropLow', type: 'number', label: 'Reinforce below (crop/h)' },
   { section: 'Reinforcement', path: 'reinforce.cropTarget', type: 'number', label: 'Until back to (crop/h)' },

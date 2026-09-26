@@ -8,6 +8,9 @@ import { trainAmount } from '../src/military.js';
 import {
   canDevelop, isRaidableOasis, oasisAnimals, reinforceTarget, trainingUnit,
 } from '../src/rules.js';
+import {
+  improveUnits, planUpgrade, recheckAt, wantedUpgrades,
+} from '../src/smithy.js';
 import { pickBuildings, pickField } from '../src/strategy.js';
 
 const cfg = resolveConfig({});
@@ -163,4 +166,51 @@ test('farm list rebuild empties only the bot lists, in chunks', async () => {
   addedTo.length = 0;
   assert.equal((await setupFarmLists(game, villages, cfg)).cleared, 0);
   assert.deepEqual(deleted, [], 'a plain setup keeps targets in range');
+});
+
+test('smithy: what to improve, in which order, and when to look again', async () => {
+  const c = resolveConfig({
+    train: { units: { 19: 't3', 20: 't6' }, overrides: { Big: { 21: 't7' } } },
+    smithy: { units: ['t1', 't9'], overrides: { Own: ['t5'] }, maxLevel: 15 },
+  });
+  assert.deepEqual(wantedUpgrades({ name: 'Big', population: 900 }, c), ['t1', 't3', 't6', 't7'], 'chiefs have no upgrades');
+  assert.deepEqual(wantedUpgrades({ name: 'Small', population: 100 }, c), ['t1'], 'small villages do not train');
+  assert.deepEqual(wantedUpgrades({ name: 'Own', population: 100 }, c), ['t5']);
+
+  const row = (unit, level, link = `/build.php?gid=13&action=research&t=${unit}`) => ({ unit, name: unit, level, link });
+  const smithy = { level: 12, busy: false, units: [row('t1', 12), row('t3', 4), row('t6', 2, null), row('t7', 4)] };
+  const plan = planUpgrade(smithy, ['t1', 't3', 't6', 't7'], 15);
+  assert.equal(plan.cap, 12, 'never above the Smithy level');
+  assert.deepEqual(plan.pending.map((u) => u.unit), ['t3', 't6', 't7']);
+  assert.equal(plan.next.unit, 't3', 'lowest level that can be improved now, ties in list order');
+  assert.equal(planUpgrade({ ...smithy, busy: true }, ['t3'], 20).next, null, 'one upgrade at a time');
+
+  const now = 1_000_000;
+  assert.equal(recheckAt(now, { smithy: null }), now + 6 * 3_600_000);
+  assert.equal(recheckAt(now, { smithy: { ...smithy, busy: true, runningSeconds: 600 }, plan: { pending: [row('t3', 4)] } }), now + 600_000);
+  assert.equal(recheckAt(now, { smithy, plan: { pending: [row('t3', 4, null)] } }), now + 3_600_000, 'hourly while short of resources');
+  assert.equal(recheckAt(now, { smithy, plan: { pending: [] } }), now + 6 * 3_600_000, 'all at the cap');
+
+  const improved = [];
+  const stored = new Map();
+  const game = {
+    dryRun: false,
+    log() {},
+    store: { get: async (k) => stored.get(k), set: async (k, v) => stored.set(k, v) },
+    smithy: async (did) => (did === 1 ? smithy : null),
+    improve: async (did, unit, link) => { improved.push([did, unit, link]); return true; },
+  };
+  const villages = [{ did: 1, name: 'Big', population: 900 }, { did: 2, name: 'Bare', population: 900 }];
+  const summary = await improveUnits(game, villages, c);
+  assert.deepEqual(improved, [[1, 't3', '/build.php?gid=13&action=research&t=t3']]);
+  assert.equal(summary[0].started, 't3 to level 5');
+  assert.equal(summary[1].note, 'no Smithy');
+  improved.length = 0;
+  await improveUnits(game, villages, c);
+  assert.deepEqual(improved, [[1, 't3', '/build.php?gid=13&action=research&t=t3']], 'Big is due again right after starting');
+  const bare = stored.get('smithy').next[2];
+  assert.ok(bare > Date.now() + 5 * 3_600_000, 'a village without a Smithy waits hours');
+  improved.length = 0;
+  await improveUnits(game, [villages[1]], c, { force: true });
+  assert.deepEqual(improved, [], 'forced, but still no Smithy there');
 });

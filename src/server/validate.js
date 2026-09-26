@@ -3,7 +3,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 export class ValidationError extends Error {}
 
 // Settings whose keys are free-form (building gids, village names).
-const MAP_PATHS = new Set(['train.units', 'train.overrides', 'research.overrides']);
+const MAP_PATHS = new Set(['train.units', 'train.overrides', 'research.overrides', 'smithy.overrides']);
 
 const kind = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
 

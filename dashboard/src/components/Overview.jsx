@@ -6,7 +6,7 @@ import {
 const sum = (list, key) => (list ?? []).reduce((n, x) => n + (x[key] ?? 0), 0);
 
 function VillageCard({
-  v, queue, training, raids, research, limit,
+  v, queue, training, raids, research, smithy, limit,
 }) {
   const developing = v.develop;
   return (
@@ -51,6 +51,7 @@ function VillageCard({
       )}
 
       {research?.started && <p className="small st st-good"><Icon name="book" size={12} /> Researching {research.started}</p>}
+      {smithy?.started && <p className="small st st-good"><Icon name="hammer" size={12} /> Smithy: improving {smithy.started}</p>}
 
       {raids.length > 0 && (
         <p className="small muted">
@@ -76,6 +77,7 @@ export default function Overview({ server, config }) {
   const raids = snapshot.raids ?? [];
   const training = snapshot.training ?? [];
   const research = new Map((snapshot.research ?? []).map((r) => [r.village, r]));
+  const smithy = new Map((snapshot.smithy ?? []).map((r) => [r.village, r]));
   const limit = config?.build?.populationLimit;
   const jobs = Object.values(queues).reduce((n, q) => n + q.length, 0);
 
@@ -99,6 +101,7 @@ export default function Overview({ server, config }) {
             training={training.filter((t) => t.village === v.name)}
             raids={raids.filter((r) => r.village === v.name)}
             research={research.get(v.name)}
+            smithy={smithy.get(v.name)}
           />
         ))}
       </div>
