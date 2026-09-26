@@ -1,9 +1,9 @@
-# auto-travian
+# auto-naitra
 
-A bot system for Travian Legends. A backend plays any number of Travian accounts, and a web
+A bot system for naitra Legends. A backend plays any number of naitra accounts, and a web
 dashboard shows and manages them.
 
-> Travian's game rules forbid automated play. The game says it answers suspected bots with
+> naitra's game rules forbid automated play. The game says it answers suspected bots with
 > CAPTCHAs, then emptied warehouses, troop losses and a ban. The bot makes no attempt to hide
 > itself. If a CAPTCHA appears, it stops that account and marks it in the dashboard. Use it at
 > your own risk.
@@ -13,7 +13,7 @@ dashboard shows and manages them.
 ┌──────────────┐  HTTPS + token  ┌───────┐   ┌──────────────────────────┐   ┌──────────┐
 │  dashboard/  │ ──────────────▶ │ Caddy │──▶│ backend (API + workers)  │──▶│ Postgres │
 │ React SPA    │   REST /api/*   └───────┘   │ one Chromium, a context  │   └──────────┘
-└──────────────┘                             │ per Travian account      │
+└──────────────┘                             │ per naitra account      │
        ▲                                     └──────────────────────────┘
        │                                                  ▲
        └──── GitHub Actions on merge to master ──▶ ghcr.io image ◀── Watchtower pulls updates
@@ -24,11 +24,11 @@ dashboard shows and manages them.
   raids inactive players. Every rule is a setting (`src/config.js`).
 - **`src/server/`**: the backend.
   - A REST API behind a bearer token.
-  - Postgres storage, with Travian passwords encrypted using AES-256-GCM.
-  - One worker per Travian account, all sharing one Chromium.
+  - Postgres storage, with naitra passwords encrypted using AES-256-GCM.
+  - One worker per naitra account, all sharing one Chromium.
 - **`dashboard/`**: a static React app for Firebase Hosting, in light and dark. Units and buildings
   appear by name (for your tribe), never as codes. From it you can:
-  - add Travian accounts on any game world, start and stop them;
+  - add naitra accounts on any game world, start and stop them;
   - see every village at a glance: build queue, training, research and raids;
   - **Army**: drag units onto a table of training buildings and research lists. The top row is
     the default for every village; drop onto a village's row to give it its own choice. Tapping
@@ -82,7 +82,7 @@ dashboard and checks that the image builds.
   | Secret | `FIREBASE_SERVICE_ACCOUNT` | JSON key of a service account with the **Firebase Hosting Admin** and **API Keys Viewer** roles. Create it under Google Cloud console → IAM → Service accounts, then Keys → Add key → JSON. |
   | Variable | `FIREBASE_PROJECT_ID` | Your Firebase project id. A repository secret with this name works too. |
   | Variable | `API_URL` | Optional. The backend URL the connect form suggests, e.g. `https://34-12-56-78.sslip.io`. |
-  | Variable | `FIREBASE_SITE` | Optional. The Hosting site to deploy to. Defaults to `"site"` in `dashboard/firebase.json` (`auto-travian`, i.e. https://auto-travian.web.app). |
+  | Variable | `FIREBASE_SITE` | Optional. The Hosting site to deploy to. Defaults to `"site"` in `dashboard/firebase.json` (`auto-naitra`, i.e. https://auto-naitra.web.app). |
 
 ## Running on a GCP VM
 
@@ -105,15 +105,15 @@ other programs on the VM.
 From Cloud Shell, or anywhere with `gcloud`:
 
 ```bash
-gcloud compute addresses create travian-bot-ip --region=us-central1
-gcloud compute instances create travian-bot \
+gcloud compute addresses create naitra-bot-ip --region=us-central1
+gcloud compute instances create naitra-bot \
   --zone=us-central1-a --machine-type=e2-small \
   --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
   --boot-disk-size=20GB --tags=http-server,https-server \
-  --address=travian-bot-ip
+  --address=naitra-bot-ip
 gcloud compute firewall-rules create allow-web \
   --allow=tcp:80,tcp:443 --target-tags=http-server,https-server
-gcloud compute addresses describe travian-bot-ip --region=us-central1 --format='value(address)'
+gcloud compute addresses describe naitra-bot-ip --region=us-central1 --format='value(address)'
 ```
 
 Notes:
@@ -127,7 +127,7 @@ Notes:
 ### 2. Install Docker (and swap on a 1 GB VM)
 
 ```bash
-gcloud compute ssh travian-bot --zone=us-central1-a
+gcloud compute ssh naitra-bot --zone=us-central1-a
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER && newgrp docker
 docker compose version          # Docker Compose v2 is included
@@ -150,14 +150,14 @@ nano .env
 
 Private repository? Either clone it with a token
 (`git clone https://<user>:<token>@github.com/...`), or copy just the folder from your
-computer: `gcloud compute scp --recurse deploy travian-bot:~ --zone=us-central1-a`.
+computer: `gcloud compute scp --recurse deploy naitra-bot:~ --zone=us-central1-a`.
 
 In `.env`, set at least:
 
 | Variable | What to put |
 | --- | --- |
 | `ADMIN_TOKEN` | A random value. You type it into the dashboard to connect. |
-| `APP_SECRET` | Another random value. It encrypts the stored Travian passwords, so keep it: changing it means re-entering them. |
+| `APP_SECRET` | Another random value. It encrypts the stored naitra passwords, so keep it: changing it means re-entering them. |
 | `POSTGRES_PASSWORD` | Any password for the bundled Postgres. |
 | `API_DOMAIN` | A name pointing at the VM's IP. No domain? Use `<ip-with-dashes>.sslip.io`, e.g. `34-12-56-78.sslip.io`. |
 | `CORS_ORIGINS` | Your dashboard URLs: `https://<project>.web.app,https://<project>.firebaseapp.com`. |
@@ -221,13 +221,13 @@ open in the firewall).
 
 Then open the dashboard on Firebase:
 1. Enter `https://<API_DOMAIN>` (plus `:API_PORT` with `https-port`) and your `ADMIN_TOKEN`.
-2. Add your Travian accounts (game world URL, username, password).
+2. Add your naitra accounts (game world URL, username, password).
 3. Press Start.
 
 Accounts that were running start again by themselves after a restart or update
 (`AUTOSTART=true`).
 
-> Run each Travian account in one place only. Two bots on the same account fight over the
+> Run each naitra account in one place only. Two bots on the same account fight over the
 > build queue and the active village. Stop any other copy before starting it on the VM.
 
 ### 5. Day to day
@@ -240,8 +240,8 @@ Accounts that were running start again by themselves after a restart or update
 | Pin a version | Set `IMAGE=ghcr.io/s4shashank12/auto-trav:0.2.17` in `.env`, then `docker compose up -d`. |
 | Restart | `docker compose restart backend` |
 | Stop everything | `docker compose down` (data stays in the volumes) |
-| Back up | `docker compose exec db pg_dump -U travian travian > backup-$(date +%F).sql` |
-| Restore | `docker compose exec -T db psql -U travian travian < backup.sql` |
+| Back up | `docker compose exec db pg_dump -U naitra naitra > backup-$(date +%F).sql` |
+| Restore | `docker compose exec -T db psql -U naitra naitra < backup.sql` |
 | Change settings in `.env` | `docker compose up -d` (recreates what changed) |
 
 Watchtower only touches containers labelled for it. Postgres and Caddy are never restarted by
@@ -284,7 +284,7 @@ Notes:
 - Every API route except `/api/health` needs `Authorization: Bearer <ADMIN_TOKEN>`. Repeated
   wrong tokens from one IP are refused for 10 minutes.
 - The backend listens on `127.0.0.1:8080` by default, and only Caddy is exposed.
-- Travian passwords are encrypted with a key derived from `APP_SECRET`, and the API never
+- naitra passwords are encrypted with a key derived from `APP_SECRET`, and the API never
   returns them.
 - The dashboard keeps the backend URL and token in the browser's localStorage. Use Disconnect
   on shared machines.
@@ -297,7 +297,7 @@ changes them per account; only the changed values are stored.
 - **Building** (villages under `build.populationLimit`, default 500):
   - Resource fields and the listed buildings (Main Building, Warehouse, Granary, Marketplace and
     the five production buildings) go to max.
-  - Each queue holds `build.queueMax` jobs (3 for Romans with Travian Plus).
+  - Each queue holds `build.queueMax` jobs (3 for Romans with naitra Plus).
   - Fields go lowest level first, with cropland first when crop runs low.
   - Missing buildings are constructed once the game allows them (the Rally Point in its own
     slot). Military buildings are only built if you add them to the list.
@@ -359,7 +359,7 @@ cd dashboard && npm install && npm run dev
 ```
 
 The single-account command line still works without Postgres. Credentials come from
-`TRAVIAN_SERVER`, `TRAVIAN_USERNAME` and `TRAVIAN_PASSWORD`, and settings from
+`naitra_SERVER`, `naitra_USERNAME` and `naitra_PASSWORD`, and settings from
 `bot.config.json` (overrides of `src/config.js`) plus the variables in `.env.example`:
 
 ```bash
