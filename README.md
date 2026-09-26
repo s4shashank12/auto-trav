@@ -1,115 +1,176 @@
 # auto-travian
 
-A Playwright bot for a Travian Legends account. It grows small villages and raids empty oases
-through the game's own farm lists.
+A bot system for Travian Legends. A backend plays any number of Travian accounts, and a web
+dashboard shows and manages them.
 
 > Travian's game rules forbid automated play. The game says it answers suspected bots with
 > CAPTCHAs, then emptied warehouses, troop losses and a ban. The bot makes no attempt to hide
-> itself. If a CAPTCHA appears, it stops immediately. Use it at your own risk.
+> itself. If a CAPTCHA appears, it stops that account and marks it in the dashboard. Use it at
+> your own risk.
 
-## Rules the bot follows
-
-All rules live in [`src/rules.js`](src/rules.js).
-
-- **Villages with 500 or more population:** no building or resource-field upgrades.
-- **Villages under 500 population:** resource fields and economy buildings go to max. Economy
-  buildings are Main Building, Warehouse, Granary, Marketplace, Sawmill, Brickyard, Iron Foundry,
-  Grain Mill and Bakery. Military buildings are never touched. Population is re-checked on the
-  village's own page before every build.
-- **Attacks:** only raids on unoccupied oases that have no animals, and only through farm lists
-  named `Oases (auto) …`. Other farm lists and "Start all farm lists" are never used.
-- **Troops:** the big villages' barracks and stables train defensive units, except Chingdi's
-  barracks, which trains Imperians. Villages short on crop send defensive troops to Chingdi as
-  reinforcements.
-
-## Commands
-
-```bash
-npm run villages     # villages, population and whether the bot may build there
-npm run build        # one pass over the small villages
-npm run farm-setup   # fill the "Oases (auto)" farm lists (100 per list, per unit type)
-npm run raid         # re-check the oases on the map and start the farm lists
-npm run train        # keep barracks and stables training defensive troops
-npm run play         # build + train + raid
-npm run loop         # keep playing until stopped
-npm run screenshot -- /build.php?id=39&gid=16&tt=99
-DRY_RUN=true npm run play   # log what would happen without clicking
+```
+ Firebase Hosting                   GCP VM (docker compose)
+┌──────────────┐  HTTPS + token  ┌───────┐   ┌──────────────────────────┐   ┌──────────┐
+│  dashboard/  │ ──────────────▶ │ Caddy │──▶│ backend (API + workers)  │──▶│ Postgres │
+│ React SPA    │   REST /api/*   └───────┘   │ one Chromium, a context  │   └──────────┘
+└──────────────┘                             │ per Travian account      │
+                                             └──────────────────────────┘
+       GitHub Actions ── merge to master ──▶ ghcr.io image ◀── Watchtower pulls updates
 ```
 
-### Building
+- **`src/`**: the bot. It builds in small villages, ships resources, uses hero resources,
+  trains troops, reinforces when crop is low, and raids oases in waves. Every rule is a setting
+  (`src/config.js`).
+- **`src/server/`**: the backend.
+  - A REST API behind a bearer token.
+  - Postgres storage, with Travian passwords encrypted using AES-256-GCM.
+  - One worker per Travian account, all sharing one Chromium.
+- **`dashboard/`**: a static React app for Firebase Hosting. From it you can:
+  - add Travian accounts on any game world;
+  - start and stop them;
+  - see villages, build queues, raids and training;
+  - read live logs and error screenshots;
+  - run actions on demand;
+  - edit every setting.
+- **`deploy/`**: `docker-compose.yml` for the VM, with Postgres, the backend, Watchtower and
+  Caddy.
 
-Romans can upgrade one resource field and one building at the same time. With Travian Plus, one
-more job fits in the waiting loop. The bot keeps each small village's queue at `BUILD_QUEUE_MAX`
-jobs (default 3; use 2 without Plus). In `--loop` mode it wakes up when the first job finishes, so
-queues don't sit idle, and for each raid wave.
+## Deploying
 
-Fields go lowest level first. Ties go to the resource you hold the least of, and cropland
-goes first when net crop falls under 10/h. Buildings go least developed first, compared with their
-max level. Missing buildings are constructed on an empty slot once the game allows them.
+### 1. Container image (GitHub Actions → GHCR)
 
-Queues are kept busy from two sources of resources:
+`.github/workflows/docker.yml` builds the backend image:
 
-- **Merchants:** when a small village drops under 30% of its storage in any resource, the nearest
-  big village with a surplus sends merchants to top it up towards 70%. Shipments already on the way
-  count towards that, and every source keeps 20,000 of each resource.
-- **Hero inventory:** when a job is still short, the bot clicks the missing resource on the build
-  page. That opens the game's own "transfer from hero" dialog, pre-filled with exactly the
-  shortfall. The bot confirms it, then builds. It never uses gold (NPC exchange, master builder).
+- **On every pull request:** checks that the image builds.
+- **When a PR merges to `master`:** pushes it to `ghcr.io/s4shashank12/auto-travian` as
+  `latest` and `sha-<commit>`.
 
-### Raiding ("rainbow" farming)
+It needs no secrets. The first push creates the package as **private**. Either make it public
+(the package's settings on GitHub), or give Watchtower a token with `read:packages` (step 2).
 
-`farm-setup` does the following:
+`.github/workflows/ci.yml` runs the unit tests and builds the dashboard on every PR.
 
-1. Works out how many more slots each village's raiding units can cover. Raiding units are
-   Legionnaires, Imperians, Equites Caesaris and Equites Imperatoris; Praetorians and scouts never
-   farm. The count uses troops at home plus those out on raids.
-2. Scans the map for unoccupied oases with no animals within `RAID_RADIUS` fields (default 45) of
-   those villages.
-3. Gives each oasis to the nearest village with room.
-4. Splits each village's oases between its unit types by distance: slow infantry takes the
-   nearest band and fast cavalry the farthest.
-5. Files them into lists named `Oases (auto) <unit>`, up to 100 targets each, adding lists as
-   needed.
+### 2. Backend on the VM
 
-Each oasis is in one list only. Re-running adds new oases and removes bot targets beyond the
-radius. Your own farm lists are never touched.
+On a GCP VM with Docker (e2-small or larger; each account's browser context needs a few
+hundred MB):
 
-`raid` sends one wave; in `--loop` mode a wave goes out every `RAID_EVERY_MINUTES` (default 10),
-whether or not earlier raids are back. Every wave sends each target again, so each oasis is hit
-every 10 minutes for as long as the troops last. Each raid sends 10 Legionnaires or Imperians,
-or 5 Equites Caesaris or Equites Imperatoris. Even an empty oasis has a small base defence that
-kills a lone unit now and then, and raids this size also beat a few animals that respawn while
-they are on their way. The nearest targets go first, because their troops return soonest. So as
-many oases as the troops can sustain are hit every wave, and far ones get what is left. A target isn't raided twice within
-`RAID_CYCLE_MINUTES` (default: the wave interval). Troops at home are shared across a village's
-lists. Every target is checked on the map again right before sending, and only oases that are
-still unoccupied and empty go out.
+```bash
+git clone https://github.com/s4shashank12/auto-travian.git && cd auto-travian/deploy
+cp .env.example .env
+openssl rand -hex 32   # use one for ADMIN_TOKEN, another for APP_SECRET
+nano .env              # tokens, POSTGRES_PASSWORD, API_DOMAIN, CORS_ORIGINS
+# While the GHCR package is private:
+echo <token> | docker login ghcr.io -u <github-user> --password-stdin
+docker compose up -d
+docker compose logs -f backend
+```
 
-### Defensive troops
+- **Database.** With `COMPOSE_PROFILES` including `local-db`, Postgres runs in the stack. To
+  use your own database instead, such as Cloud SQL or a managed Postgres:
+  1. remove `local-db` from `COMPOSE_PROFILES`;
+  2. set `DATABASE_URL` (plus `DATABASE_SSL=true` if the database requires TLS);
+  3. or use the standard `PGHOST`/`PGUSER`/… variables.
 
-`train` keeps the barracks (Praetorians; Imperians in Chingdi) and stables (Equites Caesaris,
-where researched) of the big villages training. It tops a queue up to 3 hours whenever less than 1 hour is left, using only
-resources above 5,000 of each. Small villages keep their resources for building. Training stops
-once a village's net crop would drop under 200/h. At that point the village sends enough
-Praetorians (then Equites Caesaris) to Chingdi as reinforcements to get back to 600/h, so their
-upkeep moves to the capital. That happens only while Chingdi keeps at least 2,000/h, and not
-again until the previous reinforcement has arrived. Tune these in `src/rules.js`.
+  Tables are created and migrated automatically on start.
+- **HTTPS.** The dashboard is served over HTTPS, so browsers only let it call an HTTPS API.
+  With the `https` profile, Caddy gets a Let's Encrypt certificate for `API_DOMAIN`:
+  1. point that name at the VM's external IP;
+  2. allow ports 80 and 443 in the VPC firewall.
 
-## Setup
+  No domain? `<ip-with-dashes>.sslip.io` (for example `34-12-56-78.sslip.io`) works.
+- **Updates.** Watchtower checks GHCR every 5 minutes and restarts the backend on a new
+  image. Only containers labelled for it are touched, so Postgres and Caddy are never
+  restarted. Running accounts resume on their own (`AUTOSTART=true`).
+- **Backups.** Everything lives in the `pgdata` volume, or in your own database. For example:
+  `docker compose exec db pg_dump -U travian travian > backup.sql`.
+
+### 3. Dashboard on Firebase Hosting
+
+```bash
+cd dashboard
+npm ci
+VITE_API_URL=https://api.example.com npm run build   # optional: pre-fills the connect form
+npx firebase-tools login
+npx firebase-tools deploy --only hosting --project <your-firebase-project-id>
+```
+
+Put the site's URLs (`https://<project>.web.app`, `https://<project>.firebaseapp.com`) in the
+backend's `CORS_ORIGINS`. Open the site, enter the backend URL and `ADMIN_TOKEN`, and add your
+accounts.
+
+`.github/workflows/dashboard.yml` can deploy it on every merge instead. It stays skipped until
+these are set:
+- the repository secret `FIREBASE_SERVICE_ACCOUNT` (a service account JSON key with Firebase
+  Hosting Admin);
+- the repository variables `FIREBASE_PROJECT_ID` and `API_URL`.
+
+### Security notes
+
+- Every API route except `/api/health` needs `Authorization: Bearer <ADMIN_TOKEN>`. Repeated
+  wrong tokens from one IP are refused for 10 minutes.
+- The backend listens on `127.0.0.1:8080` by default, and only Caddy is exposed.
+- Travian passwords are encrypted with a key derived from `APP_SECRET`. The API never returns
+  them. Keep `APP_SECRET` safe: changing it makes stored passwords unreadable, so you would
+  have to re-enter them.
+- The dashboard keeps the backend URL and token in the browser's localStorage. Use Disconnect
+  on shared machines.
+
+## What the bot does
+
+Each account's settings start from the defaults in `src/config.js`. The dashboard's Settings tab
+changes them per account; only the changed values are stored.
+
+- **Building** (villages under `build.populationLimit`, default 500):
+  - Resource fields and the listed buildings (Main Building, Warehouse, Granary, Marketplace and
+    the five production buildings) go to max.
+  - Each queue holds `build.queueMax` jobs (3 for Romans with Travian Plus).
+  - Fields go lowest level first, with cropland first when crop runs low.
+  - Missing buildings are constructed once the game allows them.
+  - Military buildings are never built, and population is re-checked before every click.
+- **Supply:**
+  - A small village under 30% of storage gets merchants from the nearest big village with a
+    surplus. Shipments already on the way count.
+  - A job that is still short uses the game's own "transfer from hero" dialog, which the build
+    page pre-fills with exactly the shortfall.
+  - Gold (NPC exchange, master builder) is never used.
+- **Training:**
+  - Big villages keep their barracks and stables queued 3 hours ahead with the configured
+    unit: Praetorians and Equites Caesaris by default, with per-village overrides such as
+    Imperians in one barracks.
+  - Training uses only resources above the reserve.
+- **Reinforcement:** a village whose crop would drop under 200/h stops training and sends
+  troops to the capital (or `reinforce.target`), until it is back to 600/h. That happens only
+  while the target keeps at least 2,000/h.
+- **Raiding:**
+  - Only unoccupied oases with no animals are raided, and only through farm lists whose names
+    start with `raid.listPrefix`. Other farm lists and "Start all farm lists" are never used.
+  - "Farm list setup" fills lists of up to 100 targets per unit type ("rainbow" farming): slow
+    infantry takes the nearest oases and cavalry the far ones.
+  - A wave goes out every `raid.everyMinutes` (10), whether or not earlier raids are back. The
+    nearest targets go first, and troops at home are the limit.
+  - Every target is checked on the live map right before sending.
+  - Raids carry 10 infantry or 5 cavalry: a lone unit sometimes dies even against an empty
+    oasis's base defence.
+
+## Development
 
 ```bash
 npm install
-npx playwright install chromium   # skip if Chromium is already provided
-cp .env.example .env              # fill in server, username, password
+npm test                                 # unit tests
+npm run server                           # backend; needs ADMIN_TOKEN, APP_SECRET, DATABASE_URL in .env
+cd dashboard && npm install && npm run dev
 ```
 
-`TRAVIAN_SERVER` is the game world URL from your address bar, for example
-`https://ts4.x1.international.travian.com`.
+The single-account command line still works without Postgres. Credentials come from
+`TRAVIAN_SERVER`, `TRAVIAN_USERNAME` and `TRAVIAN_PASSWORD`, and settings from
+`bot.config.json` (overrides of `src/config.js`) plus the variables in `.env.example`:
 
-Only one run drives the browser at a time. Runs share a lock file (`.auth/bot.lock`), because the
-game keeps a single "active village" per session. Screenshots go to `screenshots/`.
+```bash
+npm run villages | build | train | raid | farm-setup | play
+npm run loop                             # play until stopped
+DRY_RUN=true npm run play                # log what would happen without clicking
+```
 
-### Claude Code on the web
-
-Chromium doesn't trust the sandbox's egress proxy by default. Run `scripts/trust-proxy-ca.sh`
-once per session before launching the browser.
+On Claude Code on the web, run `scripts/trust-proxy-ca.sh` once per session so Chromium trusts
+the sandbox's proxy.
