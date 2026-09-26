@@ -1,5 +1,7 @@
 // Server settings, all from environment variables (see deploy/.env.example).
 // Postgres: DATABASE_URL, or the standard PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE variables.
+// TLS: DATABASE_SSL (false, require, verify-ca, verify-full), or sslmode= in DATABASE_URL, or
+// PGSSLMODE; DATABASE_SSL_CA / _CERT / _KEY are PEM files (or the PEM text itself).
 
 function required(env, name, minLength) {
   const value = env[name];
@@ -16,7 +18,12 @@ export function loadEnv(env = process.env) {
     adminToken: required(env, 'ADMIN_TOKEN', 16),
     appSecret: required(env, 'APP_SECRET', 16),
     databaseUrl: env.DATABASE_URL || null,
-    databaseSsl: /^(1|true|yes|require)$/i.test(env.DATABASE_SSL ?? ''),
+    databaseSsl: env.DATABASE_SSL || null,
+    pgSslMode: env.PGSSLMODE || null,
+    pgHost: env.PGHOST || null,
+    databaseSslCa: env.DATABASE_SSL_CA || null,
+    databaseSslCert: env.DATABASE_SSL_CERT || null,
+    databaseSslKey: env.DATABASE_SSL_KEY || null,
     corsOrigins: (env.CORS_ORIGINS ?? '*').split(',').map((s) => s.trim()).filter(Boolean),
     dataDir: env.DATA_DIR ?? './data',
     headless: !/^(0|false|no)$/i.test(env.HEADLESS ?? ''),

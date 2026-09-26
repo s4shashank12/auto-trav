@@ -8,3 +8,5 @@ data/
 dashboard/node_modules/
 dashboard/dist/
 deploy/.env
+deploy/certs/*
+!deploy/certs/README.md

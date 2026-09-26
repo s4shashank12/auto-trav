@@ -145,12 +145,39 @@ In `.env`, set at least:
 | `CORS_ORIGINS` | Your dashboard URLs: `https://<project>.web.app,https://<project>.firebaseapp.com`. |
 | `COMPOSE_PROFILES` | `local-db,https` (the default). This runs Postgres and Caddy on the VM. |
 
-**Using your own database** (Cloud SQL, a managed Postgres, …):
+**Using your own database** (Cloud SQL, Supabase, Neon, any managed Postgres):
 1. Drop `local-db` from `COMPOSE_PROFILES`.
-2. Set `DATABASE_URL=postgres://user:password@host:5432/dbname`.
-3. Add `DATABASE_SSL=true` if the database requires TLS.
+2. Set `DATABASE_URL`. Connection strings with `?sslmode=require` work as the provider gives
+   them.
+3. If the database requires SSL and the URL doesn't say so, set `DATABASE_SSL`:
 
-Tables are created and migrated on start.
+   | `DATABASE_SSL` | Meaning |
+   | --- | --- |
+   | `require` (or `true`) | Encrypted. The server's certificate is not checked. |
+   | `verify-ca` | Encrypted, and the certificate must be signed by `DATABASE_SSL_CA`. Setting a CA turns this on. |
+   | `verify-full` | As `verify-ca`, and the certificate must be issued for the host in `DATABASE_URL`. |
+   | `false` | No encryption. |
+
+   `DATABASE_SSL` wins over `sslmode` in the URL. With neither set, the connection is
+   unencrypted.
+4. Put certificate files in `deploy/certs`, which the backend sees as `/certs`, and point
+   `DATABASE_SSL_CA`, `DATABASE_SSL_CERT` and `DATABASE_SSL_KEY` at them (see
+   `deploy/certs/README.md`).
+
+Cloud SQL example, with the instance's SSL mode set to "Allow only SSL connections":
+- Encrypted, without checking the certificate: `DATABASE_SSL=require`.
+- Also checking the certificate:
+  1. Download `server-ca.pem` from the instance's Connections → Security page.
+  2. Put it in `deploy/certs` and set `DATABASE_SSL_CA=/certs/server-ca.pem`.
+  3. This uses `verify-ca`, because Cloud SQL's certificates name the instance, not its IP address.
+- If the instance requires trusted client certificates:
+  1. Create one on the same page.
+  2. Add `DATABASE_SSL_CERT=/certs/client-cert.pem` and `DATABASE_SSL_KEY=/certs/client-key.pem`.
+- Connect the VM over the instance's private IP (same VPC), or add the VM's external IP under
+  "Authorized networks".
+
+Tables are created and migrated on start. The backend's log shows `Database ready (SSL: …)` with
+the mode in use. If it can't connect, the error says which setting to change.
 
 ### 4. Start it
 

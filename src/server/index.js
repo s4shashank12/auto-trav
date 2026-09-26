@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import { createApp } from './api.js';
 import { makeCipher } from './crypto.js';
-import { createPool, migrate } from './db.js';
+import { createPool, explainDbError, migrate } from './db.js';
 import { loadEnv } from './env.js';
 import { BotManager } from './manager.js';
 import { makeRepo } from './repo.js';
@@ -13,7 +13,10 @@ async function main() {
   await fs.mkdir(env.dataDir, { recursive: true });
 
   const pool = createPool(env);
-  await migrate(pool);
+  await migrate(pool).catch((err) => {
+    throw new Error(`Cannot use the database: ${explainDbError(err)}`);
+  });
+  console.log(`Database ready (SSL: ${pool.sslMode}).`);
   const repo = makeRepo(pool, makeCipher(env.appSecret));
   const manager = new BotManager({ repo, env, pool });
   const app = createApp({
