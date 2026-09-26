@@ -4,8 +4,12 @@ import { chromium } from 'playwright';
 
 const STATE_FILE = '.auth/state.json';
 const SCREENSHOT_DIR = 'screenshots';
+const RALLY_POINT = 39;
 
 export const FIELD_TYPES = { 1: 'wood', 2: 'clay', 3: 'iron', 4: 'crop' };
+const FIELD_NAMES = /^(Woodcutter|Clay Pit|Iron Mine|Cropland)\b/i;
+
+export class CaptchaError extends Error {}
 
 const toInt = (text) => {
   if (text == null) return null;
@@ -33,13 +37,18 @@ export class Travian {
       locale: 'en-US',
     });
     this.page = await this.context.newPage();
+    if (process.env.DEBUG_API) {
+      this.page.on('request', (r) => {
+        if (/\/api\//.test(r.url())) this.log(`API ${r.method()} ${r.url()} ${(r.postData() ?? '').slice(0, 800)}`);
+      });
+    }
   }
 
   async close() {
     await this.browser?.close();
   }
 
-  // Random human-ish delay so actions are not fired back to back.
+  // Random delay so actions are not fired back to back.
   async pause(minMs = 800, maxMs = 2200) {
     await this.page.waitForTimeout(minMs + Math.random() * (maxMs - minMs));
   }
@@ -47,6 +56,17 @@ export class Travian {
   async goto(pathname) {
     await this.page.goto(`${this.server}${pathname}`, { waitUntil: 'domcontentloaded' });
     await this.pause();
+    await this.checkCaptcha();
+  }
+
+  // Travian shows a CAPTCHA when it suspects a bot. Stop immediately instead of carrying on.
+  async checkCaptcha() {
+    const flagged = await this.page.evaluate(() => Boolean(document.querySelector('iframe[src*="recaptcha"], iframe[src*="captcha"]'))
+      || /CAPTCHA/.test(document.body?.innerText ?? ''));
+    if (flagged) {
+      const shot = await this.screenshot('captcha');
+      throw new CaptchaError(`Travian is showing a CAPTCHA; stopping. See ${shot}`);
+    }
   }
 
   async screenshot(name) {
@@ -71,31 +91,76 @@ export class Travian {
 
   async login() {
     await this.goto('/dorf1.php');
-    if (await this.isLoggedIn()) {
-      this.log('Reusing saved session.');
-      return;
-    }
-    if (!this.username || !this.password) {
-      throw new Error('TRAVIAN_USERNAME and TRAVIAN_PASSWORD must be set to log in');
+    if (!(await this.isLoggedIn())) {
+      if (!this.username || !this.password) {
+        throw new Error('TRAVIAN_USERNAME and TRAVIAN_PASSWORD must be set to log in');
+      }
+      await this.dismissCookieBanner();
+      await this.page.fill('input[name="name"]', this.username);
+      await this.pause(300, 900);
+      await this.page.fill('input[name="password"]', this.password);
+      await this.pause(300, 900);
+      await this.page.click('button[type="submit"]');
+      await this.page.waitForURL(/dorf[12]\.php/, { timeout: 30_000 }).catch(() => {});
+      await this.pause();
+      await this.checkCaptcha();
+      if (!(await this.isLoggedIn())) {
+        const shot = await this.screenshot('login-failed');
+        throw new Error(`Login failed; see ${shot}`);
+      }
+      this.log('Logged in.');
     }
     await this.dismissCookieBanner();
-    await this.page.fill('input[name="name"]', this.username);
-    await this.pause(300, 900);
-    await this.page.fill('input[name="password"]', this.password);
-    await this.pause(300, 900);
-    await this.page.click('button[type="submit"]');
-    await this.page.waitForURL(/dorf[12]\.php/, { timeout: 30_000 }).catch(() => {});
-    await this.pause();
-    if (!(await this.isLoggedIn())) {
-      const shot = await this.screenshot('login-failed');
-      throw new Error(`Login failed; see ${shot}`);
-    }
     await fs.mkdir(path.dirname(STATE_FILE), { recursive: true });
     await this.context.storageState({ path: STATE_FILE });
-    this.log('Logged in.');
   }
 
-  // Reads the resource overview (dorf1): stock, storage, production, fields and build queue.
+  // Calls the same JSON endpoints the game's own pages use, with the logged-in session.
+  async api(pathname, body, method = 'POST') {
+    const res = await this.page.evaluate(async ([url, payload, verb]) => {
+      const r = await fetch(url, {
+        method: verb,
+        headers: { 'content-type': 'application/json; charset=UTF-8' },
+        body: JSON.stringify(payload),
+      });
+      return { status: r.status, text: await r.text() };
+    }, [pathname, body, method]);
+    if (res.status < 200 || res.status > 299) throw new Error(`${pathname} returned ${res.status}: ${res.text.slice(0, 200)}`);
+    return res.text ? JSON.parse(res.text) : null;
+  }
+
+  async graphql(query, variables = {}) {
+    const res = await this.api('/api/v1/graphql', { query, variables });
+    if (res.errors?.length) throw new Error(`GraphQL error: ${res.errors.map((e) => e.message).join('; ')}`);
+    return res.data;
+  }
+
+  // All own villages with id, name, coordinates and population.
+  async villages() {
+    await this.goto('/profile');
+    const pops = await this.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('table.villages tbody tr')].map((tr) => [
+        tr.querySelector('td.name a')?.textContent.trim(),
+        tr.querySelector('td.inhabitants')?.textContent,
+      ]),
+    ));
+    const list = await this.page.evaluate(() => [...document.querySelectorAll('.villageList .listEntry')].map((e) => ({
+      did: e.dataset.did,
+      name: e.querySelector('.name')?.textContent.trim(),
+      x: e.querySelector('.coordinateX')?.textContent,
+      y: e.querySelector('.coordinateY')?.textContent,
+    })));
+    const coord = (t) => toInt(String(t).replace(/−/g, '-'));
+    return list.map((v) => ({
+      did: toInt(v.did), name: v.name, x: coord(v.x), y: coord(v.y), population: toInt(pops[v.name]),
+    }));
+  }
+
+  async switchVillage(did) {
+    await this.goto(`/dorf1.php?newdid=${did}`);
+  }
+
+  // Resource overview (dorf1) of the active village: stock, storage, production, fields and build queue.
   async status() {
     await this.goto('/dorf1.php');
     const raw = await this.page.evaluate(() => {
@@ -117,7 +182,10 @@ export class Travian {
         secondsLeft: li.querySelector('.timer')?.getAttribute('value') ?? null,
       }));
       return {
-        village: text('#villageName') ?? text('.villageInput') ?? document.querySelector('.villageInput')?.value ?? null,
+        did: document.querySelector('.villageInput')?.dataset.did ?? null,
+        village: document.querySelector('.villageInput')?.value ?? null,
+        population: text('#sidebarBoxActiveVillage .population span'),
+        roman: /\btribe1\b/.test(document.querySelector('#resourceFieldContainer')?.className ?? ''),
         stock: js?.storage ?? { l1: text('#l1'), l2: text('#l2'), l3: text('#l3'), l4: text('#l4') },
         maxStorage: js?.maxStorage ?? {
           l1: text('.warehouse .capacity .value'), l2: text('.warehouse .capacity .value'),
@@ -133,7 +201,10 @@ export class Travian {
       Object.entries(FIELD_TYPES).map(([i, name]) => [name, toInt(obj[`l${i}`])]),
     );
     return {
+      did: toInt(raw.did),
       village: raw.village?.trim() || null,
+      population: toInt(raw.population),
+      roman: raw.roman,
       stock: byType(raw.stock),
       maxStorage: byType(raw.maxStorage),
       production: byType(raw.production),
@@ -142,65 +213,394 @@ export class Travian {
           ...f, id: toInt(f.id), gid: toInt(f.gid), level: toInt(f.level), type: FIELD_TYPES[toInt(f.gid)],
         }))
         .filter((f) => f.id && f.type),
-      queue: raw.queue.map((q) => ({ ...q, secondsLeft: toInt(q.secondsLeft) })),
+      queue: raw.queue.map((q) => ({ ...q, secondsLeft: toInt(q.secondsLeft), isField: FIELD_NAMES.test(q.name ?? '') })),
     };
   }
 
-  // Balanced growth: upgrade the lowest-level field, breaking ties by the resource we hold least of.
-  // Crop fields jump the line when net crop production gets thin, so troops never starve.
-  pickField(status) {
-    const candidates = status.fields.filter((f) => !f.maxLevel && !f.underConstruction);
-    if (!candidates.length) return null;
-    const lowCrop = status.production?.crop != null && status.production.crop < 10;
-    const affordable = candidates.filter((f) => f.canBuild);
-    const pool = affordable.length ? affordable : candidates;
-    const score = (f) => [
-      lowCrop && f.type === 'crop' ? 0 : 1,
-      f.level,
-      status.stock?.[f.type] ?? 0,
-    ];
-    return [...pool].sort((a, b) => {
-      const [sa, sb] = [score(a), score(b)];
-      for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return sa[i] - sb[i];
-      return a.id - b.id;
-    })[0];
+  // Village centre (dorf2) of the active village: every building slot with its building and state.
+  async buildings() {
+    await this.goto('/dorf2.php');
+    const slots = await this.page.evaluate(() => [...document.querySelectorAll('#villageContent .buildingSlot')].map((d) => {
+      const cls = d.querySelector('a')?.getAttribute('class') ?? '';
+      return {
+        id: d.dataset.aid,
+        gid: d.dataset.gid,
+        name: d.dataset.name || null,
+        level: d.querySelector('.labelLayer')?.textContent ?? '0',
+        canBuild: /\bgood\b/.test(cls),
+        underConstruction: /underConstruction/.test(cls),
+        maxLevel: /maxLevel/.test(cls),
+      };
+    }));
+    const seen = new Set();
+    return slots
+      .map((s) => ({ ...s, id: toInt(s.id), gid: toInt(s.gid), level: toInt(s.level) ?? 0 }))
+      .filter((s) => s.id && !seen.has(s.id) && seen.add(s.id));
   }
 
-  // Opens a building slot and presses the green upgrade button. Returns false if it cannot be built now.
-  async upgrade(slotId) {
-    await this.goto(`/build.php?id=${slotId}`);
-    const button = this.page.locator('.upgradeButtonsContainer .section1 button.green:not(.disabled)').first();
+  // Opens a slot and presses the green upgrade button. Returns false if it cannot be built now.
+  // Only the plain green button is used, never gold (paid) or video-bonus buttons.
+  // If resources are short, the missing part is first transferred from the hero's inventory.
+  async upgrade(slotId, did) {
+    const url = `/build.php?id=${slotId}`;
+    const button = () => this.page.locator('.upgradeButtonsContainer .section1 button.green.build:not(.disabled)').first();
+    await this.goto(url);
+    if (!(await button().isVisible().catch(() => false)) && (await this.topUpFromHero(this.page.locator('#contract'), did))) {
+      await this.goto(url);
+    }
+    return this.pressBuildButton(button(), `slot ${slotId}`, did);
+  }
+
+  // Constructs building `gid` on empty slot `slotId`, topping up from the hero like upgrade().
+  // Returns false if it is not available.
+  async construct(slotId, gid, category, did) {
+    const url = `/build.php?id=${slotId}${category ? `&category=${category}` : ''}`;
+    const button = () => this.page.locator(`button.green.new[onclick*="gid=${gid}&"]:not(.disabled)`).first();
+    await this.goto(url);
+    if (!(await button().isVisible().catch(() => false))
+      && (await this.topUpFromHero(this.page.locator(`#contract_building${gid} #contract`), did))) {
+      await this.goto(url);
+    }
+    return this.pressBuildButton(button(), `building ${gid} on slot ${slotId}`, did);
+  }
+
+  // A build page marks the resources a job is short of; clicking one opens the game's own
+  // "transfer from hero" dialog pre-filled with the shortfall. Returns true if anything was moved.
+  async topUpFromHero(contract, did) {
+    const lacking = contract.locator('.inlineIcon.resource.transfer.fillUp').first();
+    if (!(await lacking.isVisible().catch(() => false))) return false;
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (did != null && active !== did) throw new Error(`Refusing hero transfer: village ${active} is active, expected ${did}`);
+    if (this.dryRun) {
+      this.log('[dry run] would transfer the missing resources from the hero');
+      return false;
+    }
+    await lacking.click();
+    const dlg = this.page.locator('.dialog, .dialogWrapper, #dialogContent').filter({ has: this.page.locator('input[name="lumber"]') }).last();
+    await dlg.waitFor({ timeout: 10_000 });
+    await this.pause(600, 1200);
+    const amounts = await dlg.evaluate((d) => Object.fromEntries(['lumber', 'clay', 'iron', 'crop']
+      .map((n) => [n, Number((d.querySelector(`input[name="${n}"]`)?.value ?? '').replace(/\D/g, '')) || 0])));
+    // "Transfer" or "Transfer selected", never "Transfer maximum".
+    const transfer = dlg.locator('button').filter({ hasText: /^\s*Transfer( selected)?\s*$/ }).first();
+    if (!Object.values(amounts).some(Boolean) || (await transfer.isDisabled())) {
+      this.log('The hero has nothing to cover the shortfall.');
+      await this.page.keyboard.press('Escape');
+      return false;
+    }
+    await Promise.all([
+      this.page.waitForResponse((r) => r.url().includes('/hero/v2/inventory/use-item') && r.request().method() === 'POST', { timeout: 15_000 }),
+      transfer.click(),
+    ]);
+    await this.pause(1500, 2500);
+    this.log(`Transferred from hero: ${Object.entries(amounts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')}.`);
+    return true;
+  }
+
+  // `did` is the village the click is meant for; refuse if a different village is active.
+  async pressBuildButton(button, what, did) {
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (did != null && active !== did) throw new Error(`Refusing to build ${what}: village ${active} is active, expected ${did}`);
     if (!(await button.isVisible().catch(() => false))) return false;
+    const onclick = (await button.getAttribute('onclick')) ?? '';
+    if (!/action=build/.test(onclick) || /gold/.test((await button.getAttribute('class')) ?? '')) return false;
     const label = (await button.textContent())?.replace(/\s+/g, ' ').trim();
     if (this.dryRun) {
-      this.log(`[dry run] would click "${label}" on slot ${slotId}`);
+      this.log(`[dry run] would click "${label}" for ${what}`);
       return true;
     }
     await button.click();
     await this.page.waitForURL(/dorf[12]\.php/, { timeout: 15_000 }).catch(() => {});
     await this.pause();
-    this.log(`Clicked "${label}" on slot ${slotId}.`);
+    this.log(`Clicked "${label}" for ${what}.`);
     return true;
   }
 
-  // One upkeep pass. Returns the status it acted on, so callers can decide when to come back.
-  async play({ queueSlots = 1 } = {}) {
-    const status = await this.status();
-    this.log(formatStatus(status));
-    if (status.queue.length >= queueSlots) {
-      this.log('Build queue is full; nothing to do.');
-      return status;
+  // Stock, free merchants and merchant movements of every own village, in one request.
+  async economy() {
+    const data = await this.graphql(`{ownPlayer{villages{id name
+      resources{lumberStock clayStock ironStock cropStock}
+      marketplace{merchantsInfo{total capacity available}
+        merchantsMovements{edges{node{type cancelled to{id} carriedResources{lumber clay iron crop}}}}}}}}`);
+    return data.ownPlayer.villages.map((v) => ({
+      did: v.id,
+      name: v.name,
+      stock: {
+        wood: v.resources.lumberStock, clay: v.resources.clayStock, iron: v.resources.ironStock, crop: v.resources.cropStock,
+      },
+      merchants: v.marketplace?.merchantsInfo ?? { total: 0, capacity: 0, available: 0 },
+      outgoing: (v.marketplace?.merchantsMovements?.edges ?? []).map((e) => e.node)
+        .filter((n) => n.type === 'OUTGOING' && !n.cancelled)
+        .map((n) => ({
+          to: n.to.id,
+          resources: {
+            wood: n.carriedResources.lumber, clay: n.carriedResources.clay, iron: n.carriedResources.iron, crop: n.carriedResources.crop,
+          },
+        })),
+    }));
+  }
+
+  // Sends resources with merchants from the active village to (x|y) through the marketplace form.
+  async sendResources(did, { x, y }, amounts) {
+    await this.goto('/build.php?gid=17&t=5');
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to send resources: village ${active} is active, expected ${did}`);
+    const form = this.page.locator('#content');
+    await form.locator('input[name="x"]').fill(String(x));
+    await form.locator('input[name="y"]').fill(String(y));
+    const names = { wood: 'lumber', clay: 'clay', iron: 'iron', crop: 'crop' };
+    for (const [key, name] of Object.entries(names)) {
+      await form.locator(`input[name="${name}"]`).fill(String(amounts[key] ?? 0));
+      await this.pause(200, 500);
     }
-    const field = this.pickField(status);
-    if (!field) {
-      this.log('Every resource field is maxed or under construction.');
-      return status;
+    if (this.dryRun) {
+      this.log(`[dry run] would send ${JSON.stringify(amounts)} to (${x}|${y})`);
+      return true;
     }
-    this.log(`Next: ${field.type} field (slot ${field.id}) level ${field.level} -> ${field.level + 1}`);
-    if (!(await this.upgrade(field.id))) {
-      this.log('Not enough resources yet (or the upgrade button is unavailable).');
+    const [response] = await Promise.all([
+      this.page.waitForResponse((r) => r.url().includes('/marketplace/resources/send') && r.request().method() === 'POST', { timeout: 15_000 }),
+      form.locator('button.send:not(.disabled)').click(),
+    ]);
+    await this.pause();
+    return response.ok();
+  }
+
+  // Own troops at home in every village, keyed by village id.
+  async villageTroops() {
+    const data = await this.graphql(`{ownPlayer{villages{id troops{ownTroopsAtTown{units{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}}}`);
+    return new Map(data.ownPlayer.villages.map((v) => [v.id, v.troops?.ownTroopsAtTown?.units ?? {}]));
+  }
+
+  // Training page of military building `gid` in village `did`: stock, net production, the queue's
+  // remaining seconds and, for `unit`, its cost, upkeep, seconds per unit and the game's max.
+  // Returns null when the village has no such building or cannot train the unit.
+  async trainingInfo(did, gid, unit) {
+    await this.goto(`/build.php?newdid=${did}&gid=${gid}`);
+    const info = await this.page.evaluate((unitId) => {
+      const block = document.querySelector(`.trainUnits .innerTroopWrapper[data-troopid="${unitId}"]`);
+      const values = [...(block?.querySelectorAll('.resourceWrapper .value') ?? [])].map((e) => e.textContent);
+      const js = typeof window.resources === 'object' ? window.resources : null;
+      return {
+        active: document.querySelector('.villageInput')?.dataset.did ?? null,
+        hasForm: Boolean(document.querySelector('.trainUnits')),
+        block: Boolean(block?.querySelector(`input[name="${unitId}"]`)),
+        cost: values.slice(0, 4),
+        upkeep: values[4] ?? null,
+        duration: block?.querySelector('.inlineIcon.duration .value')?.textContent ?? null,
+        max: block?.querySelector('.cta a')?.textContent ?? null,
+        queue: [...document.querySelectorAll('table.under_progress td.dur .timer')].map((t) => t.getAttribute('value')),
+        stock: js?.storage ?? null,
+        production: js?.production ?? null,
+      };
+    }, unit);
+    if (toInt(info.active) !== did) throw new Error(`Expected village ${did} to be active, got ${info.active}`);
+    if (!info.hasForm || !info.block) return null;
+    const seconds = (t) => (t ?? '0:0:0').split(':').map(Number).reduce((a, b) => a * 60 + b, 0);
+    const res = (o) => ({ wood: toInt(o?.l1), clay: toInt(o?.l2), iron: toInt(o?.l3), crop: toInt(o?.l4) });
+    const [wood, clay, iron, crop] = info.cost.map(toInt);
+    return {
+      cost: { wood, clay, iron, crop },
+      upkeep: toInt(info.upkeep) ?? 1,
+      unitSeconds: seconds(info.duration),
+      max: toInt(info.max) ?? 0,
+      queueSeconds: Math.max(0, ...info.queue.map(toInt)),
+      stock: res(info.stock),
+      production: res(info.production),
+    };
+  }
+
+  // Trains `amount` of `unit` on the training page opened by trainingInfo().
+  async train(did, unit, amount) {
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to train: village ${active} is active, expected ${did}`);
+    if (this.dryRun) {
+      this.log(`[dry run] would train ${amount} ${unit}`);
+      return true;
     }
-    return status;
+    await this.page.locator(`.trainUnits .innerTroopWrapper[data-troopid="${unit}"] input[name="${unit}"]`).fill(String(amount));
+    await this.pause(400, 900);
+    await Promise.all([
+      this.page.waitForLoadState('domcontentloaded'),
+      this.page.locator('#content button.startTraining').first().click(),
+    ]);
+    await this.pause();
+    return true;
+  }
+
+  // Sends `troops` from village `did` as reinforcement to (x|y). The confirmation page must say
+  // "Reinforcement" before it is confirmed. Returns the arrival time in ms, or null.
+  async sendReinforcement(did, { x, y }, troops) {
+    await this.goto(`/build.php?newdid=${did}&id=${RALLY_POINT}&gid=16&tt=2`);
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to send troops: village ${active} is active, expected ${did}`);
+    for (const [unit, n] of Object.entries(troops)) await this.page.fill(`input[name="troop[${unit}]"]`, String(n));
+    await this.page.fill('input[name="x"]', String(x));
+    await this.page.fill('input[name="y"]', String(y));
+    await this.page.check('input[name="eventType"][value="5"]');
+    await this.pause(400, 900);
+    await Promise.all([this.page.waitForLoadState('domcontentloaded'), this.page.click('button[name="ok"]')]);
+    await this.pause();
+    const headline = (await this.page.locator('table.troop_details .troopHeadline').first().innerText().catch(() => '')).trim();
+    if (!/^Reinforcement/i.test(headline)) throw new Error(`Refusing to confirm troops: the order reads "${headline}"`);
+    const arrivalText = await this.page.locator('#content').innerText();
+    const m = arrivalText.match(/In (\d+):(\d+):(\d+) hours/);
+    const arrival = Date.now() + (m ? ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000 : 0);
+    if (this.dryRun) {
+      this.log(`[dry run] would confirm "${headline}"`);
+      return arrival;
+    }
+    await Promise.all([this.page.waitForLoadState('domcontentloaded'), this.page.click('#confirmSendTroops')]);
+    await this.pause();
+    return arrival;
+  }
+
+  // Changes farm list slots with the request the "Edit target" dialog sends, in batches.
+  // `slots` are { id, listId, x, y, troops }.
+  async updateFarmListSlots(slots) {
+    for (let i = 0; i < slots.length; i += 50) {
+      const batch = slots.slice(i, i + 50);
+      if (this.dryRun) {
+        this.log(`[dry run] would update ${batch.length} farm list targets`);
+        continue;
+      }
+      await this.api('/api/v1/farm-list/slot', {
+        slots: batch.map((s) => ({
+          listId: s.listId,
+          x: s.x,
+          y: s.y,
+          units: Object.fromEntries(Array.from({ length: 10 }, (_, k) => [`t${k + 1}`, s.troops[`t${k + 1}`] ?? 0])),
+          active: true,
+          abandoned: false,
+          id: s.id,
+        })),
+      }, 'PUT');
+      await this.pause(1000, 2000);
+    }
+  }
+
+  // Deletes farm list slots with the request the list's "Delete" menu entry sends.
+  async deleteFarmListSlots(slotIds) {
+    if (!slotIds.length) return;
+    if (this.dryRun) {
+      this.log(`[dry run] would delete ${slotIds.length} farm list targets`);
+      return;
+    }
+    await this.api('/api/v1/farm-list/slot', { slots: slotIds, abandoned: false }, 'DELETE');
+    await this.pause();
+  }
+
+  // Adds targets to a farm list with the same request the "Add target" dialog sends, in batches.
+  async addFarmListSlots(listId, targets, troops) {
+    const units = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`t${i + 1}`, troops[`t${i + 1}`] ?? 0]));
+    for (let i = 0; i < targets.length; i += 20) {
+      const batch = targets.slice(i, i + 20);
+      if (this.dryRun) {
+        this.log(`[dry run] would add ${batch.length} targets to farm list ${listId}`);
+        continue;
+      }
+      await this.api('/api/v1/farm-list/slot', {
+        slots: batch.map((t) => ({ listId, x: t.x, y: t.y, units, active: true, abandoned: false })),
+      });
+      await this.pause(1000, 2500);
+    }
+  }
+
+  // Map tiles in a 31x31 area centred on (x, y), as the game's map loads them.
+  async mapTiles(x, y) {
+    const res = await this.api('/api/v1/map/position', { data: { x, y, zoomLevel: 3, ignorePositions: [] } });
+    return new Map(res.tiles.map((t) => [`${t.position.x}|${t.position.y}`, t]));
+  }
+
+  // Own troops currently at home in the active village, read from the send-troops form.
+  async troopsAtHome() {
+    await this.goto(`/build.php?id=${RALLY_POINT}&gid=16&tt=2`);
+    const raw = await this.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('input[name^="troop[t"]')].map((input) => [
+        input.name.match(/t\d+/)[0],
+        input.closest('td')?.innerText.match(/\/\s*([\d,.\s‬‭]+)/)?.[1] ?? '0',
+      ]),
+    ));
+    return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, toInt(v) ?? 0]));
+  }
+
+  async farmLists() {
+    const data = await this.graphql(`{ownPlayer{farmLists{id name
+      ownerVillage{id name troops{ownTroopsAtTown{units{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}
+      slots{id isActive isRunning target{x y} troop{t1 t2 t3 t4 t5 t6 t7 t8 t9 t10}}}}}`);
+    return data.ownPlayer.farmLists;
+  }
+
+  async openFarmLists(did) {
+    await this.switchVillage(did);
+    await this.goto(`/build.php?id=${RALLY_POINT}&gid=16&tt=99`);
+  }
+
+  dialog() {
+    return this.page.locator('.dialog, .dialogWrapper, #dialogContent').filter({ has: this.page.locator('button.save') }).last();
+  }
+
+  async fillTroops(scope, troops) {
+    for (const [unit, amount] of Object.entries(troops)) {
+      await scope.locator(`input[name="${unit}"]`).fill(String(amount));
+    }
+  }
+
+  // Creates a farm list owned by village `did` and returns its id.
+  async createFarmList({ did, villageName, name, troops }) {
+    if (name.length > 30) throw new Error(`Farm list name "${name}" is longer than the game's 30 characters`);
+    await this.openFarmLists(did);
+    await this.page.locator('button.createFarmList').first().click();
+    const dlg = this.dialog();
+    await dlg.waitFor();
+    await dlg.locator('input[name="listName"]').fill(name);
+    await dlg.locator('select[name="villageId"]').selectOption({ label: villageName });
+    await this.fillTroops(dlg, troops);
+    await this.pause(300, 800);
+    if (this.dryRun) {
+      this.log(`[dry run] would create farm list "${name}" for ${villageName}`);
+      await dlg.locator('button.cancel').click();
+      return null;
+    }
+    await dlg.locator('button.save').click();
+    await dlg.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+    await this.pause();
+    const list = (await this.farmLists()).find((l) => l.name === name && l.ownerVillage.id === did);
+    if (!list) throw new Error(`Farm list "${name}" was not created for ${villageName}`);
+    this.log(`Created farm list "${name}" (${list.id}) for ${villageName}.`);
+    return list.id;
+  }
+
+  // Adds (x|y) to farm list `listId` through the "Add target" dialog. The farm list page must be open.
+  async addFarmListTarget(listId, { x, y }, troops) {
+    await this.page.getByText('Add target', { exact: false }).first().click();
+    const dlg = this.dialog();
+    await dlg.waitFor();
+    await dlg.locator('select[name="listId"]').selectOption(String(listId));
+    await dlg.locator('input[name="x"]').fill(String(x));
+    await dlg.locator('input[name="y"]').fill(String(y));
+    await this.pause(1200, 2000); // the dialog looks the target up
+    await this.fillTroops(dlg, troops);
+    if (this.dryRun) {
+      this.log(`[dry run] would add (${x}|${y}) to farm list ${listId}`);
+      await dlg.locator('button.cancel').click();
+      return;
+    }
+    await dlg.locator('button.save').click();
+    await dlg.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+    await this.pause(500, 1200);
+  }
+
+  // Starts exactly `slotIds` of farm list `listId`, with the request its Start button sends when
+  // those slots are ticked. Returns the game's per-target results.
+  async startFarmListTargets(listId, slotIds) {
+    if (!slotIds.length) return [];
+    if (this.dryRun) {
+      this.log(`[dry run] would start ${slotIds.length} targets of farm list ${listId}`);
+      return slotIds.map((id) => ({ id, error: null }));
+    }
+    const res = await this.api('/api/v1/farm-list/send', { action: 'farmList', lists: [{ id: listId, targets: slotIds }] });
+    await this.pause();
+    return res?.lists?.find((l) => l.id === listId)?.targets ?? [];
   }
 }
 
@@ -217,7 +617,7 @@ export function formatStatus(s) {
     ? s.queue.map((q) => `${q.name}${q.secondsLeft != null ? ` (${Math.ceil(q.secondsLeft / 60)} min)` : ''}`).join('; ')
     : 'empty';
   return [
-    `Village: ${s.village ?? 'unknown'}`,
+    `Village: ${s.village ?? 'unknown'} (population ${s.population ?? '?'})`,
     `Resources: ${res.join(' | ')}`,
     `Fields: ${levels.join(' ')}`,
     `Queue: ${queue}`,

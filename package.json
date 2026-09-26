@@ -2,13 +2,17 @@
   "name": "auto-travian",
   "version": "0.1.0",
   "private": true,
-  "description": "Playwright helper that logs into a Travian Legends account and keeps a village's resource fields growing.",
+  "description": "Playwright bot for a Travian Legends account: develops small villages and raids empty oases through farm lists.",
   "type": "module",
   "bin": {
     "auto-travian": "src/cli.js"
   },
   "scripts": {
-    "status": "node --env-file-if-exists=.env src/cli.js status",
+    "villages": "node --env-file-if-exists=.env src/cli.js villages",
+    "build": "node --env-file-if-exists=.env src/cli.js build",
+    "farm-setup": "node --env-file-if-exists=.env src/cli.js farm-setup",
+    "raid": "node --env-file-if-exists=.env src/cli.js raid",
+    "train": "node --env-file-if-exists=.env src/cli.js train",
     "play": "node --env-file-if-exists=.env src/cli.js play",
     "loop": "node --env-file-if-exists=.env src/cli.js play --loop",
     "screenshot": "node --env-file-if-exists=.env src/cli.js screenshot"
