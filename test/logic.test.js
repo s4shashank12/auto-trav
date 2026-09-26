@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DEFAULT_CONFIG, configFromEnv, mergeConfig, resolveConfig } from '../src/config.js';
-import { listUnit, slotCapacity, splitByUnit } from '../src/farming.js';
+import {
+  listUnit, setupFarmLists, slotCapacity, splitByUnit,
+} from '../src/farming.js';
 import { trainAmount } from '../src/military.js';
 import {
   canDevelop, isRaidableOasis, oasisAnimals, reinforceTarget, trainingUnit,
@@ -120,4 +122,45 @@ test('training: per-village buildings, "none", and what to research', async () =
   assert.deepEqual(wantedResearch(big, c).sort(), ['t3', 't5', 't6', 't7']);
   assert.deepEqual(wantedResearch({ name: 'Small', population: 100 }, c), ['t4'], 'small villages do not train');
   assert.deepEqual(wantedResearch(big, resolveConfig({ research: { fromTraining: false } })), []);
+});
+
+test('farm list rebuild empties only the bot lists, in chunks', async () => {
+  const slot = (id, x) => ({
+    id, isActive: true, isRunning: false, target: { x, y: 0 }, troop: { t1: 10 },
+  });
+  let lists = [
+    { id: 1, name: 'Oases (auto) Legionnaires', ownerVillage: { id: 7, name: 'Home' }, slots: Array.from({ length: 70 }, (_, i) => slot(i + 1, i % 20)) },
+    { id: 2, name: 'My own list', ownerVillage: { id: 7, name: 'Home' }, slots: [slot(500, 3)] },
+  ];
+  lists[0].slots.slice(0, 3).forEach((s) => { s.isRunning = true; });
+  const oasis = (x, y) => ({ position: { x, y }, title: '{k.fo}', uid: null, text: '' });
+  const deleted = [];
+  const addedTo = [];
+  const game = {
+    log() {},
+    async pause() {},
+    mapTiles: async () => new Map([[5, 5], [-4, 2], [9, -9], [30, 30]].map(([x, y]) => [`${x}|${y}`, oasis(x, y)])),
+    async addFarmListSlots(listId, targets) { addedTo.push([listId, targets.length]); },
+    farmLists: async () => structuredClone(lists),
+    async deleteFarmListSlots(ids) {
+      deleted.push(ids.length);
+      lists = lists.map((l) => ({ ...l, slots: l.slots.filter((s) => !ids.includes(s.id)) }));
+    },
+    async updateFarmListSlots() { throw new Error('nothing to resize'); },
+    villageTroops: async () => new Map([[7, {}]]),
+  };
+  const villages = [{ did: 7, name: 'Home', x: 0, y: 0 }];
+  const result = await setupFarmLists(game, villages, cfg, { rebuild: true });
+  assert.deepEqual(deleted, [50, 20]);
+  assert.equal(result.cleared, 70);
+  assert.equal(result.added, 3, 'no troops at home: only the 3 raids still out are budgeted for');
+  assert.deepEqual(addedTo, [[1, 3]], 'refilled into the emptied list, nearest oases first');
+  assert.equal(lists[0].slots.length, 0);
+  assert.equal(lists[1].slots.length, 1, 'other farm lists are never touched');
+
+  deleted.length = 0;
+  lists[0].slots = [slot(1, 1)];
+  addedTo.length = 0;
+  assert.equal((await setupFarmLists(game, villages, cfg)).cleared, 0);
+  assert.deepEqual(deleted, [], 'a plain setup keeps targets in range');
 });

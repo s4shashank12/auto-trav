@@ -6,6 +6,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { tribeUnits } from '../game.js';
+import { timeAgo } from '../util.js';
 import { Icon, Stepper, useDragSensors } from './ui.jsx';
 
 // Farm list names are at most 30 characters, so long unit names get initials there.
@@ -24,7 +25,7 @@ function Row({
       <div className="plan-main">
         <strong><Icon name={unit?.kind ?? 'foot'} size={14} /> {unit?.name ?? item.unit}</strong>
       </div>
-      <label className="plan-level">
+      <label className="plan-level stacked">
         <span className="muted small">troops per raid</span>
         <Stepper value={item.perSlot} min={1} max={500} onChange={onCount} label={`${unit?.name} per raid`} />
       </label>
@@ -104,13 +105,83 @@ function UnitList({
   );
 }
 
+// The bot's own farm lists: what they hold, and the buttons that (re)create them.
+function FarmLists({
+  server, draft, onAction, canRebuild,
+}) {
+  const snapshot = server.snapshot ?? {};
+  const prefix = draft.value('raid.listPrefix') ?? 'Oases (auto)';
+  const setup = snapshot.farmSetup;
+  const wave = snapshot.lastWaveAt;
+  // Whichever is newer: the lists as the last setup left them, or as the last raid wave saw them.
+  const fromSetup = setup?.lists && (!wave || setup.at > wave);
+  const lists = fromSetup ? setup.lists : (snapshot.raids ?? []);
+  const busy = /^action: farm-/.test(server.statusMessage ?? '');
+  const blocked = draft.dirty || busy;
+  const rebuild = () => {
+    const ok = window.confirm(`Remove every target from the bot's "${prefix}" farm lists and fill them again with the current raid troops?\n\nYour other farm lists are not touched, and raids already on their way come back as usual.`);
+    if (ok) onAction('farm-rebuild', 'Rebuilding farm lists… Follow it in Logs.');
+  };
+  return (
+    <section className="card">
+      <div className="card-head">
+        <div>
+          <h3><Icon name="target" /> Farm lists</h3>
+          <p className="muted small">
+            The bot raids only through its own “{prefix}” lists. <strong>Set up</strong> creates them when missing, adds new empty oases,
+            drops ones out of range and applies the troops per raid. <strong>Rebuild</strong> empties those lists first and fills them again.
+          </p>
+        </div>
+        <div className="row wrap">
+          <button type="button" className="btn primary" disabled={blocked} onClick={() => onAction('farm-setup', 'Setting up farm lists… Follow it in Logs.')}>
+            <Icon name="target" /> Set up farm lists
+          </button>
+          {canRebuild && (
+            <button type="button" className="btn" disabled={blocked} onClick={rebuild}>
+              <Icon name="refresh" /> Rebuild from scratch
+            </button>
+          )}
+        </div>
+      </div>
+      {draft.dirty && <p className="small st st-warn"><Icon name="alert" size={12} /> Save your changes first: farm lists are built from the saved settings.</p>}
+      {busy && <p className="small st st-good"><Icon name="play" size={12} /> Working on the farm lists now…</p>}
+      {setup && (
+        <p className="small muted">
+          Last {setup.rebuild ? 'rebuilt' : 'set up'} {timeAgo(setup.at)}: {setup.added} oases added
+          {setup.cleared ? `, ${setup.cleared} cleared first` : ''}
+          {setup.removed ? `, ${setup.removed} out of range removed` : ''}
+          {setup.resized ? `, ${setup.resized} troop counts updated` : ''}.
+        </p>
+      )}
+      {lists.length ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Village</th><th>Farm list</th><th className="num">Targets</th>{!fromSetup && <th className="num">Being raided</th>}</tr>
+            </thead>
+            <tbody>
+              {lists.map((l) => (
+                <tr key={l.village + l.list}>
+                  <td>{l.village}</td><td>{l.list}</td><td className="num">{l.targets}</td>{!fromSetup && <td className="num">{l.running}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="muted center">No farm lists yet. Set up farm lists creates them.</p>}
+    </section>
+  );
+}
+
 const NUMBERS = [
   ['raid.everyMinutes', 'Send a wave every', 'min', 1, 120],
   ['raid.radius', 'Oases within', 'fields', 5, 200],
   ['raid.listSize', 'Targets per farm list', '', 10, 100],
 ];
 
-export default function Raiding({ draft, server }) {
+export default function Raiding({
+  draft, server, onAction, canRebuild,
+}) {
   const tribe = server.snapshot?.tribe ?? null;
   const fighters = tribeUnits(tribe).filter((u) => ['foot', 'horse'].includes(u.kind));
   return (
@@ -130,6 +201,7 @@ export default function Raiding({ draft, server }) {
           ))}
         </div>
       </section>
+      <FarmLists server={server} draft={draft} onAction={onAction} canRebuild={canRebuild} />
       <div className="two-col">
         <UnitList
           id="raid"
