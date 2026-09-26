@@ -2,8 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-const STATE_FILE = '.auth/state.json';
-const SCREENSHOT_DIR = 'screenshots';
 const RALLY_POINT = 39;
 
 export const FIELD_TYPES = { 1: 'wood', 2: 'clay', 3: 'iron', 4: 'crop' };
@@ -17,22 +15,40 @@ const toInt = (text) => {
   return Number.isNaN(n) ? null : n;
 };
 
+// Saved login (cookies) kept in a JSON file; the server keeps it in Postgres instead.
+export const fileSession = (file = '.auth/state.json') => ({
+  load: async () => JSON.parse(await fs.readFile(file, 'utf8').catch(() => 'null')),
+  save: async (state) => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(state));
+  },
+});
+
 export class Travian {
-  constructor({ server, username, password, headless = true, dryRun = false, log = console.log }) {
-    if (!server) throw new Error('TRAVIAN_SERVER is not set (e.g. https://ts1.x1.international.travian.com)');
+  // `browser` lets several accounts share one Chromium (each gets its own context); `session`
+  // loads and saves the login; `store` keeps small bits of bot state (see stores.js).
+  constructor({
+    server, username, password, headless = true, dryRun = false, log = console.log,
+    browser = null, session = fileSession(), store = null, screenshotDir = 'screenshots',
+  }) {
+    if (!server) throw new Error('No Travian server URL (e.g. https://ts1.x1.international.travian.com)');
     this.server = server.replace(/\/+$/, '');
     this.username = username;
     this.password = password;
     this.headless = headless;
     this.dryRun = dryRun;
     this.log = log;
+    this.sharedBrowser = browser;
+    this.session = session;
+    this.store = store;
+    this.screenshotDir = screenshotDir;
   }
 
   async start() {
-    this.browser = await chromium.launch({ headless: this.headless });
-    const hasState = await fs.access(STATE_FILE).then(() => true, () => false);
+    this.browser = this.sharedBrowser ?? await chromium.launch({ headless: this.headless });
+    const storageState = await this.session.load().catch(() => null);
     this.context = await this.browser.newContext({
-      storageState: hasState ? STATE_FILE : undefined,
+      storageState: storageState ?? undefined,
       viewport: { width: 1280, height: 900 },
       locale: 'en-US',
     });
@@ -45,7 +61,8 @@ export class Travian {
   }
 
   async close() {
-    await this.browser?.close();
+    await this.context?.close().catch(() => {});
+    if (!this.sharedBrowser) await this.browser?.close();
   }
 
   // Random delay so actions are not fired back to back.
@@ -70,8 +87,8 @@ export class Travian {
   }
 
   async screenshot(name) {
-    await fs.mkdir(SCREENSHOT_DIR, { recursive: true });
-    const file = path.join(SCREENSHOT_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}-${name}.png`);
+    await fs.mkdir(this.screenshotDir, { recursive: true });
+    const file = path.join(this.screenshotDir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${name}.png`);
     await this.page.screenshot({ path: file, fullPage: true });
     return file;
   }
@@ -111,8 +128,7 @@ export class Travian {
       this.log('Logged in.');
     }
     await this.dismissCookieBanner();
-    await fs.mkdir(path.dirname(STATE_FILE), { recursive: true });
-    await this.context.storageState({ path: STATE_FILE });
+    await this.session.save(await this.context.storageState());
   }
 
   // Calls the same JSON endpoints the game's own pages use, with the logged-in session.
@@ -135,13 +151,13 @@ export class Travian {
     return res.data;
   }
 
-  // All own villages with id, name, coordinates and population.
+  // All own villages with id, name, coordinates, population and whether it is the capital.
   async villages() {
     await this.goto('/profile');
-    const pops = await this.page.evaluate(() => Object.fromEntries(
+    const rows = await this.page.evaluate(() => Object.fromEntries(
       [...document.querySelectorAll('table.villages tbody tr')].map((tr) => [
         tr.querySelector('td.name a')?.textContent.trim(),
-        tr.querySelector('td.inhabitants')?.textContent,
+        { population: tr.querySelector('td.inhabitants')?.textContent, capital: Boolean(tr.querySelector('td.name .additionalInfo')) },
       ]),
     ));
     const list = await this.page.evaluate(() => [...document.querySelectorAll('.villageList .listEntry')].map((e) => ({
@@ -152,7 +168,12 @@ export class Travian {
     })));
     const coord = (t) => toInt(String(t).replace(/−/g, '-'));
     return list.map((v) => ({
-      did: toInt(v.did), name: v.name, x: coord(v.x), y: coord(v.y), population: toInt(pops[v.name]),
+      did: toInt(v.did),
+      name: v.name,
+      x: coord(v.x),
+      y: coord(v.y),
+      population: toInt(rows[v.name]?.population),
+      capital: Boolean(rows[v.name]?.capital),
     }));
   }
 
@@ -240,12 +261,13 @@ export class Travian {
 
   // Opens a slot and presses the green upgrade button. Returns false if it cannot be built now.
   // Only the plain green button is used, never gold (paid) or video-bonus buttons.
-  // If resources are short, the missing part is first transferred from the hero's inventory.
-  async upgrade(slotId, did) {
+  // If resources are short and `hero` is on, the missing part is first transferred from the
+  // hero's inventory.
+  async upgrade(slotId, did, { hero = true } = {}) {
     const url = `/build.php?id=${slotId}`;
     const button = () => this.page.locator('.upgradeButtonsContainer .section1 button.green.build:not(.disabled)').first();
     await this.goto(url);
-    if (!(await button().isVisible().catch(() => false)) && (await this.topUpFromHero(this.page.locator('#contract'), did))) {
+    if (hero && !(await button().isVisible().catch(() => false)) && (await this.topUpFromHero(this.page.locator('#contract'), did))) {
       await this.goto(url);
     }
     return this.pressBuildButton(button(), `slot ${slotId}`, did);
@@ -253,11 +275,11 @@ export class Travian {
 
   // Constructs building `gid` on empty slot `slotId`, topping up from the hero like upgrade().
   // Returns false if it is not available.
-  async construct(slotId, gid, category, did) {
+  async construct(slotId, gid, category, did, { hero = true } = {}) {
     const url = `/build.php?id=${slotId}${category ? `&category=${category}` : ''}`;
     const button = () => this.page.locator(`button.green.new[onclick*="gid=${gid}&"]:not(.disabled)`).first();
     await this.goto(url);
-    if (!(await button().isVisible().catch(() => false))
+    if (hero && !(await button().isVisible().catch(() => false))
       && (await this.topUpFromHero(this.page.locator(`#contract_building${gid} #contract`), did))) {
       await this.goto(url);
     }
@@ -314,6 +336,17 @@ export class Travian {
     await this.pause();
     this.log(`Clicked "${label}" for ${what}.`);
     return true;
+  }
+
+  // Downloads a text file from the game world (for example /map.sql) with the browser session.
+  async fetchText(pathname) {
+    if (!this.page.url().startsWith(this.server)) await this.goto('/dorf1.php');
+    const res = await this.page.evaluate(async (url) => {
+      const r = await fetch(url);
+      return { status: r.status, text: await r.text() };
+    }, pathname);
+    if (res.status !== 200) throw new Error(`${pathname} returned ${res.status}`);
+    return res.text;
   }
 
   // Stock, free merchants and merchant movements of every own village, in one request.
@@ -384,6 +417,7 @@ export class Travian {
         active: document.querySelector('.villageInput')?.dataset.did ?? null,
         hasForm: Boolean(document.querySelector('.trainUnits')),
         block: Boolean(block?.querySelector(`input[name="${unitId}"]`)),
+        name: [...(block?.querySelectorAll('.tit a') ?? [])].map((a) => a.textContent.trim()).filter(Boolean).pop() ?? null,
         cost: values.slice(0, 4),
         upkeep: values[4] ?? null,
         duration: block?.querySelector('.inlineIcon.duration .value')?.textContent ?? null,
@@ -399,6 +433,7 @@ export class Travian {
     const res = (o) => ({ wood: toInt(o?.l1), clay: toInt(o?.l2), iron: toInt(o?.l3), crop: toInt(o?.l4) });
     const [wood, clay, iron, crop] = info.cost.map(toInt);
     return {
+      name: info.name,
       cost: { wood, clay, iron, crop },
       upkeep: toInt(info.upkeep) ?? 1,
       unitSeconds: seconds(info.duration),
@@ -407,6 +442,12 @@ export class Travian {
       stock: res(info.stock),
       production: res(info.production),
     };
+  }
+
+  // Net crop production per hour of village `did`.
+  async netCrop(did) {
+    await this.goto(`/dorf1.php?newdid=${did}`);
+    return toInt(await this.page.evaluate(() => window.resources?.production?.l4 ?? null)) ?? 0;
   }
 
   // Trains `amount` of `unit` on the training page opened by trainingInfo().

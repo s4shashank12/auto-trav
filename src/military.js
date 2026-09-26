@@ -1,98 +1,104 @@
-import fs from 'node:fs/promises';
 import {
-  CAPITAL_CROP_MIN, CROP_LOW, CROP_TARGET, DEFENSIVE_UNITS, REINFORCE_TARGET, canDevelop, trainingUnit,
+  canDevelop, reinforceTarget, trainingUnit,
 } from './rules.js';
 
 const RESOURCES = ['wood', 'clay', 'iron', 'crop'];
-const REINFORCE_STATE = '.auth/reinforcements.json';
-const BUILDING_NAMES = { 19: 'Barracks', 20: 'Stable' };
-const UNIT_NAMES = { t2: 'Praetorians', t3: 'Imperians', t6: 'Equites Caesaris' };
-
-async function readState() {
-  return JSON.parse(await fs.readFile(REINFORCE_STATE, 'utf8').catch(() => '{}'));
-}
-
-async function writeState(state) {
-  await fs.mkdir('.auth', { recursive: true });
-  await fs.writeFile(REINFORCE_STATE, JSON.stringify(state));
-}
+const REINFORCE_STATE = 'reinforcements';
+const BUILDING_NAMES = {
+  19: 'Barracks', 20: 'Stable', 21: 'Workshop', 29: 'Great Barracks', 30: 'Great Stable',
+};
 
 // How many units to add so the queue lasts `targetMinutes`, limited by resources above `reserve`,
-// the game's own maximum and the crop the village can spare above CROP_LOW.
-export function trainAmount(info, { aheadMinutes, targetMinutes, reserve }) {
+// the game's own maximum and the crop the village can spare above `cropLow`.
+export function trainAmount(info, {
+  aheadMinutes, targetMinutes, reserve, cropLow,
+}) {
   if (info.queueSeconds >= aheadMinutes * 60 || !info.unitSeconds) return 0;
   const wanted = Math.ceil((targetMinutes * 60 - info.queueSeconds) / info.unitSeconds);
   const affordable = Math.min(...RESOURCES.map((r) => (info.cost[r] ? Math.floor((info.stock[r] - reserve) / info.cost[r]) : Infinity)));
-  const cropRoom = Math.floor((info.production.crop - CROP_LOW) / Math.max(1, info.upkeep));
+  const cropRoom = Math.floor((info.production.crop - cropLow) / Math.max(1, info.upkeep));
   return Math.max(0, Math.min(wanted, affordable, info.max, cropRoom));
 }
 
-// Sends defensive troops from a village short on crop to the capital, so their upkeep moves there.
-// Sends only what brings the village back to CROP_TARGET, only while the capital keeps
-// CAPITAL_CROP_MIN, and not again until the previous reinforcement has arrived.
-async function relieveCrop(game, village, capital, crop, capitalCrop) {
-  const state = await readState();
+// Sends troops from a village short on crop to the reinforcement target, so their upkeep moves
+// there. Sends only what brings the village back to `cropTarget`, only while the target keeps
+// `targetCropMin`, and not again until the previous reinforcement has arrived.
+async function relieveCrop(game, village, target, crop, targetCrop, cfg) {
+  const { cropTarget, targetCropMin, units } = cfg.reinforce;
+  const state = (await game.store?.get(REINFORCE_STATE)) ?? {};
   if ((state[village.did] ?? 0) > Date.now()) {
-    game.log(`${village.name}: crop ${crop}/h, reinforcement to ${capital.name} still on its way.`);
-    return capitalCrop;
+    game.log(`${village.name}: crop ${crop}/h, reinforcement to ${target.name} still on its way.`);
+    return targetCrop;
   }
   const home = (await game.villageTroops()).get(village.did) ?? {};
-  let need = CROP_TARGET - crop;
+  let need = cropTarget - crop;
   const troops = {};
-  for (const [unit, upkeep] of [['t2', 1], ['t6', 4]]) {
-    const n = Math.min(home[unit] ?? 0, Math.ceil(need / upkeep));
+  let upkeep = 0;
+  for (const u of units) {
+    const n = Math.min(home[u.unit] ?? 0, Math.ceil(need / u.upkeep));
     if (n > 0) {
-      troops[unit] = n;
-      need -= n * upkeep;
+      troops[u.unit] = n;
+      need -= n * u.upkeep;
+      upkeep += n * u.upkeep;
     }
     if (need <= 0) break;
   }
-  const upkeep = (troops.t2 ?? 0) + (troops.t6 ?? 0) * 4;
   if (!upkeep) {
-    game.log(`${village.name}: crop ${crop}/h and no defensive troops at home to move.`);
-    return capitalCrop;
+    game.log(`${village.name}: crop ${crop}/h and no troops at home to move.`);
+    return targetCrop;
   }
-  if (capitalCrop - upkeep < CAPITAL_CROP_MIN) {
-    game.log(`${village.name}: crop ${crop}/h, but ${capital.name} (${capitalCrop}/h) cannot feed ${upkeep} more upkeep.`);
-    return capitalCrop;
+  if (targetCrop - upkeep < targetCropMin) {
+    game.log(`${village.name}: crop ${crop}/h, but ${target.name} (${targetCrop}/h) cannot feed ${upkeep} more upkeep.`);
+    return targetCrop;
   }
-  game.log(`${village.name}: crop ${crop}/h, sending ${Object.entries(troops).map(([u, n]) => `${n} ${UNIT_NAMES[u]}`).join(', ')} to reinforce ${capital.name}.`);
-  const arrival = await game.sendReinforcement(village.did, capital, troops);
-  if (!game.dryRun) await writeState({ ...state, [village.did]: arrival });
-  return capitalCrop - upkeep;
+  game.log(`${village.name}: crop ${crop}/h, sending ${Object.entries(troops).map(([u, n]) => `${n} ${u}`).join(', ')} to reinforce ${target.name}.`);
+  const arrival = await game.sendReinforcement(village.did, target, troops);
+  if (!game.dryRun) await game.store?.set(REINFORCE_STATE, { ...state, [village.did]: arrival });
+  return targetCrop - upkeep;
 }
 
-// Keeps barracks and stables in the big villages training (defensive units, except where
-// TRAIN_OVERRIDES says otherwise). Small villages keep their resources for building. Villages
-// low on crop reinforce the capital instead of training.
-export async function trainDefense(game, villages, {
-  aheadMinutes = 60, targetMinutes = 180, reserve = 5_000,
-} = {}) {
-  const capital = villages.find((v) => v.name === REINFORCE_TARGET);
-  let capitalCrop = null;
-  for (const village of villages.filter((v) => !canDevelop(v))) {
-    for (const gid of Object.keys(DEFENSIVE_UNITS).map(Number)) {
-      const unit = trainingUnit(village, gid);
+// Keeps the configured military buildings in the big villages training (per-village overrides
+// apply). Small villages keep their resources for building. Villages low on crop reinforce the
+// target village instead of training. Returns a summary per building.
+export async function trainTroops(game, villages, cfg) {
+  const {
+    aheadMinutes, targetMinutes, reserve, units,
+  } = cfg.train;
+  const { cropLow } = cfg.reinforce;
+  const target = reinforceTarget(villages, cfg);
+  let targetCrop = null;
+  const summary = [];
+  for (const village of villages.filter((v) => !canDevelop(v, cfg))) {
+    for (const gid of Object.keys(units).map(Number)) {
+      const unit = trainingUnit(village, gid, cfg);
+      if (!unit) continue;
       const info = await game.trainingInfo(village.did, gid, unit);
       if (!info) continue;
+      const building = BUILDING_NAMES[gid] ?? `Building ${gid}`;
       const crop = info.production.crop;
-      if (crop < CROP_LOW) {
-        if (capital && village.did !== capital.did) {
-          if (capitalCrop == null) capitalCrop = (await game.trainingInfo(capital.did, 19, trainingUnit(capital, 19)))?.production.crop ?? 0;
-          capitalCrop = await relieveCrop(game, village, capital, crop, capitalCrop);
+      if (crop < cropLow) {
+        summary.push({ village: village.name, building, unit: info.name ?? unit, queuedMinutes: Math.round(info.queueSeconds / 60), trained: 0, note: 'low crop' });
+        if (cfg.features.reinforce && target && village.did !== target.did) {
+          if (targetCrop == null) targetCrop = await game.netCrop(target.did);
+          targetCrop = await relieveCrop(game, village, target, crop, targetCrop, cfg);
         } else {
           game.log(`${village.name}: crop ${crop}/h is too low to train.`);
         }
         break;
       }
-      const amount = trainAmount(info, { aheadMinutes, targetMinutes, reserve });
+      const amount = trainAmount(info, {
+        aheadMinutes, targetMinutes, reserve, cropLow,
+      });
       const queued = Math.round(info.queueSeconds / 60);
+      const unitName = info.name ?? unit;
+      summary.push({ village: village.name, building, unit: unitName, queuedMinutes: queued, trained: amount });
       if (!amount) {
-        if (info.queueSeconds < aheadMinutes * 60) game.log(`${village.name} ${BUILDING_NAMES[gid]}: ${queued} min queued, not enough resources to add ${UNIT_NAMES[unit]}.`);
+        if (info.queueSeconds < aheadMinutes * 60) game.log(`${village.name} ${building}: ${queued} min queued, not enough resources to add ${unitName}.`);
         continue;
       }
-      game.log(`${village.name} ${BUILDING_NAMES[gid]}: ${queued} min queued, training ${amount} ${UNIT_NAMES[unit]}.`);
+      game.log(`${village.name} ${building}: ${queued} min queued, training ${amount} ${unitName}.`);
       await game.train(village.did, unit, amount);
     }
   }
+  return summary;
 }

@@ -1,0 +1,56 @@
+# The whole stack on one machine, built from this checkout: Postgres, the backend and the
+# dashboard. For trying things out; the VM runs docker-compose.yml with the GHCR image instead.
+#   cd deploy
+#   docker compose -f docker-compose.local.yml up -d --build
+#   open http://localhost:8081 and connect to http://localhost:8080 with ADMIN_TOKEN below
+# Everything listens on 127.0.0.1 only. Stop with "down" (add -v to also delete the data).
+name: auto-travian-local
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: travian
+      POSTGRES_USER: travian
+      POSTGRES_PASSWORD: travian
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U travian -d travian"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ..
+      args:
+        APP_VERSION: ${APP_VERSION:-local}
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-local-admin-token-change-me}
+      APP_SECRET: ${APP_SECRET:-local-app-secret-change-me}
+      CORS_ORIGINS: http://localhost:${DASHBOARD_PORT:-8081},http://127.0.0.1:${DASHBOARD_PORT:-8081}
+      DATABASE_URL: postgres://travian:travian@db:5432/travian
+      # Off by default here, so a local copy never starts playing an account the VM also plays.
+      AUTOSTART: ${AUTOSTART:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - data:/data
+    shm_size: 1gb
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+
+  dashboard:
+    build:
+      context: ../dashboard
+      args:
+        VITE_APP_VERSION: ${APP_VERSION:-local}
+        VITE_API_URL: http://localhost:${BACKEND_PORT:-8080}
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8081}:80"
+
+volumes:
+  pgdata:
+  data:

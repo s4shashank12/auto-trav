@@ -1,13 +1,15 @@
 {
   "name": "auto-travian",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Playwright bot for a Travian Legends account: develops small villages and raids empty oases through farm lists.",
+  "description": "Travian Legends bot: develops small villages, raids oases in waves, trains troops; multi-account server with a web dashboard.",
   "type": "module",
   "bin": {
     "auto-travian": "src/cli.js"
   },
   "scripts": {
+    "server": "node --env-file-if-exists=.env src/server/index.js",
+    "test": "node --test test/*.test.js",
     "villages": "node --env-file-if-exists=.env src/cli.js villages",
     "build": "node --env-file-if-exists=.env src/cli.js build",
     "farm-setup": "node --env-file-if-exists=.env src/cli.js farm-setup",
@@ -21,6 +23,8 @@
     "node": ">=22.9"
   },
   "dependencies": {
+    "express": "^5.2.1",
+    "pg": "^8.23.0",
     "playwright": "1.56.1"
   }
 }

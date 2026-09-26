@@ -1,7 +1,4 @@
-import fs from 'node:fs/promises';
-import {
-  AUTO_FARM_LIST_PREFIX, FARM_LIST_SIZE, RAID_UNITS, isAutoFarmList, isRaidableOasis, oasisAnimals,
-} from './rules.js';
+import { isAutoFarmList, isRaidableOasis, oasisAnimals } from './rules.js';
 
 // Map tiles fetched in 31x31 windows, reusing a window for every tile it covers.
 export class TileCache {
@@ -41,21 +38,24 @@ export class TileCache {
 }
 
 const key = (x, y) => `${x}|${y}`;
+const RAID_STATE = 'raid-state';
 
-// The unit an auto farm list raids with: the one its first slot sends most of.
-export function listUnit(list) {
+// The unit an auto farm list raids with: the one its first slot sends most of, or for an empty
+// list the unit its name ends with.
+export function listUnit(list, cfg) {
+  const units = cfg.raid.units;
   const troop = list.slots[0]?.troop;
-  if (troop) return Object.keys(RAID_UNITS).sort((a, b) => (troop[b] ?? 0) - (troop[a] ?? 0))[0];
-  const words = list.name.slice(AUTO_FARM_LIST_PREFIX.length).trim().replace(/ \d+$/, '');
-  return Object.entries(RAID_UNITS).find(([, u]) => words === u.short || words === u.name)?.[0];
+  if (troop) return [...units].sort((a, b) => (troop[b.unit] ?? 0) - (troop[a.unit] ?? 0))[0]?.unit;
+  const words = list.name.slice(cfg.raid.listPrefix.length).trim().replace(/ \d+$/, '');
+  return units.find((u) => words === u.short || words === u.name)?.unit;
 }
 
 // How many more farm list targets each raiding unit of a village can take on, budgeting
 // `planUnits` per target: its troops at home plus the targets being raided (their troops are out),
 // minus the targets it already has.
-export function slotCapacity(home, lists) {
+export function slotCapacity(home, lists, units) {
   const cap = {};
-  for (const [unit, { planUnits }] of Object.entries(RAID_UNITS)) {
+  for (const { unit, planUnits } of units) {
     const slots = lists.flatMap((l) => l.slots).filter((s) => (s.troop[unit] ?? 0) > 0);
     const running = slots.filter((s) => s.isRunning).length;
     cap[unit] = Math.max(0, Math.floor((home[unit] ?? 0) / planUnits) + running - slots.length);
@@ -64,20 +64,20 @@ export function slotCapacity(home, lists) {
 }
 
 // Splits a village's oases (nearest first) between its raiding units in proportion to what each
-// can cover: slow units take the nearest band, fast units the farthest ("rainbow" farming).
-export function splitByUnit(oases, cap) {
-  const units = Object.keys(RAID_UNITS).filter((u) => cap[u] > 0);
-  const total = units.reduce((n, u) => n + cap[u], 0);
-  const take = Object.fromEntries(units.map((u) => [u, Math.min(cap[u], Math.floor((oases.length * cap[u]) / total))]));
-  let left = oases.length - units.reduce((n, u) => n + take[u], 0);
-  for (const u of [...units].reverse()) {
+// can cover: slow units (listed first) take the nearest band, fast units the farthest ("rainbow").
+export function splitByUnit(oases, cap, units) {
+  const ids = units.map((u) => u.unit).filter((u) => cap[u] > 0);
+  const total = ids.reduce((n, u) => n + cap[u], 0);
+  const take = Object.fromEntries(ids.map((u) => [u, Math.min(cap[u], Math.floor((oases.length * cap[u]) / total))]));
+  let left = oases.length - ids.reduce((n, u) => n + take[u], 0);
+  for (const u of [...ids].reverse()) {
     const extra = Math.min(left, cap[u] - take[u]);
     take[u] += extra;
     left -= extra;
   }
   const plan = [];
   let i = 0;
-  for (const u of units) {
+  for (const u of ids) {
     plan.push({ unit: u, targets: oases.slice(i, i + take[u]) });
     i += take[u];
   }
@@ -85,38 +85,42 @@ export function splitByUnit(oases, cap) {
 }
 
 // Fills the bot's farm lists with every empty, unoccupied oasis within `radius` fields of the
-// village raiding it, up to FARM_LIST_SIZE slots per list, one list set per unit type. Each oasis
-// goes to one list only, and bot slots farther than `radius` are removed. Safe to re-run.
-export async function setupFarmLists(game, villages, { radius = 45 } = {}) {
-  let lists = (await game.farmLists()).filter(isAutoFarmList);
+// village raiding it, up to `listSize` slots per list, one list set per unit type. Each oasis
+// goes to one list only, bot slots farther than `radius` are removed, and every bot slot is set to
+// its unit's per-raid amount. Safe to re-run.
+export async function setupFarmLists(game, villages, cfg) {
+  const { radius, listSize, listPrefix, units } = cfg.raid;
+  const unitInfo = (u) => units.find((x) => x.unit === u);
+  const botLists = async () => (await game.farmLists()).filter((l) => isAutoFarmList(l, cfg));
+  let lists = await botLists();
   const byId = new Map(villages.map((v) => [v.did, v]));
   const tooFar = lists.flatMap((l) => {
     const owner = byId.get(l.ownerVillage.id);
-    return l.slots.filter((s) => Math.hypot(s.target.x - owner.x, s.target.y - owner.y) > radius).map((s) => s.id);
+    return owner ? l.slots.filter((s) => Math.hypot(s.target.x - owner.x, s.target.y - owner.y) > radius).map((s) => s.id) : [];
   });
   if (tooFar.length) {
     game.log(`Removing ${tooFar.length} targets more than ${radius} fields from their village.`);
     await game.deleteFarmListSlots(tooFar);
-    lists = (await game.farmLists()).filter(isAutoFarmList);
+    lists = await botLists();
   }
 
-  // Bring every bot slot to its unit's current per-raid amount.
-  const resize = lists.flatMap((l) => l.slots.map((s) => ({ l, s, unit: listUnit(l) })))
-    .filter(({ s, unit }) => Object.entries(s.troop).some(([u, n]) => n !== (u === unit ? RAID_UNITS[unit].perSlot : 0)))
-    .map(({ l, s, unit }) => ({ id: s.id, listId: l.id, x: s.target.x, y: s.target.y, troops: { [unit]: RAID_UNITS[unit].perSlot } }));
+  const resize = lists.flatMap((l) => l.slots.map((s) => ({ l, s, unit: listUnit(l, cfg) })))
+    .filter(({ unit }) => unitInfo(unit))
+    .filter(({ s, unit }) => Object.entries(s.troop).some(([u, n]) => n !== (u === unit ? unitInfo(unit).perSlot : 0)))
+    .map(({ l, s, unit }) => ({ id: s.id, listId: l.id, x: s.target.x, y: s.target.y, troops: { [unit]: unitInfo(unit).perSlot } }));
   if (resize.length) {
-    game.log(`Setting ${resize.length} targets to ${Object.values(RAID_UNITS).map((u) => `${u.perSlot} ${u.name}`).join(' / ')} per raid.`);
+    game.log(`Setting ${resize.length} targets to ${units.map((u) => `${u.perSlot} ${u.name}`).join(' / ')} per raid.`);
     await game.updateFarmListSlots(resize);
-    lists = (await game.farmLists()).filter(isAutoFarmList);
+    lists = await botLists();
   }
   const troops = await game.villageTroops();
   const known = new Set(lists.flatMap((l) => l.slots.map((s) => key(s.target.x, s.target.y))));
 
   const raiders = villages
-    .map((v) => ({ ...v, cap: slotCapacity(troops.get(v.did) ?? {}, lists.filter((l) => l.ownerVillage.id === v.did)) }))
+    .map((v) => ({ ...v, cap: slotCapacity(troops.get(v.did) ?? {}, lists.filter((l) => l.ownerVillage.id === v.did), units) }))
     .filter((v) => Object.values(v.cap).some((n) => n > 0));
   for (const v of raiders) {
-    game.log(`${v.name}: room for ${Object.entries(v.cap).filter(([, n]) => n).map(([u, n]) => `${n} ${RAID_UNITS[u].name}`).join(', ')} slots.`);
+    game.log(`${v.name}: room for ${Object.entries(v.cap).filter(([, n]) => n).map(([u, n]) => `${n} ${unitInfo(u).name}`).join(', ')} targets.`);
   }
 
   const tiles = new TileCache(game);
@@ -147,31 +151,34 @@ export async function setupFarmLists(game, villages, { radius = 45 } = {}) {
     assigned.get(v.did).push({ ...o, dist });
   }
 
+  let added = 0;
   for (const v of raiders) {
-    for (const { unit, targets } of splitByUnit(assigned.get(v.did), v.cap)) {
-      const { name, short, perSlot } = RAID_UNITS[unit];
+    for (const { unit, targets } of splitByUnit(assigned.get(v.did), v.cap, units)) {
+      const { name, short, perSlot } = unitInfo(unit);
       const troopsPerSlot = { [unit]: perSlot };
       let pending = targets;
       while (pending.length) {
-        let list = lists.find((l) => l.ownerVillage.id === v.did && listUnit(l) === unit && l.slots.length < FARM_LIST_SIZE);
+        let list = lists.find((l) => l.ownerVillage.id === v.did && listUnit(l, cfg) === unit && l.slots.length < listSize);
         if (!list) {
-          const base = `${AUTO_FARM_LIST_PREFIX} ${short}`;
-          const taken = new Set(lists.filter((l) => l.ownerVillage.id === v.did).map((l) => l.name));
+          const base = `${listPrefix} ${short}`;
+          const names = new Set(lists.filter((l) => l.ownerVillage.id === v.did).map((l) => l.name));
           let listName = base;
-          for (let n = 2; taken.has(listName); n++) listName = `${base} ${n}`;
+          for (let n = 2; names.has(listName); n++) listName = `${base} ${n}`;
           const id = await game.createFarmList({ did: v.did, villageName: v.name, name: listName, troops: troopsPerSlot });
           if (!id) break;
-          lists = (await game.farmLists()).filter(isAutoFarmList);
+          lists = await botLists();
           list = lists.find((l) => l.id === id);
         }
-        const batch = pending.slice(0, FARM_LIST_SIZE - list.slots.length);
+        const batch = pending.slice(0, listSize - list.slots.length);
         pending = pending.slice(batch.length);
         game.log(`${v.name}: adding ${batch.length} oases (${batch[0].dist.toFixed(0)}-${batch.at(-1).dist.toFixed(0)} fields) to "${list.name}", ${perSlot} ${name} each.`);
         await game.addFarmListSlots(list.id, batch, troopsPerSlot);
         list.slots.push(...batch.map((t) => ({ target: t, troop: troopsPerSlot, isActive: true })));
+        added += batch.length;
       }
     }
   }
+  return { removed: tooFar.length, resized: resize.length, added };
 }
 
 function unsafeReason(tile) {
@@ -180,30 +187,33 @@ function unsafeReason(tile) {
   return `${oasisAnimals(tile)} animals`;
 }
 
-const RAID_STATE = '.auth/raid-state.json';
-
 // Sends one raid wave from the bot's own farm lists ("rainbow" farming on an interval). Every wave
-// (every `waveMinutes`) each list sends its targets again, whether or not earlier raids are back,
-// so every target is raided about once per `cycleMinutes` (by default every wave). Nearest targets
-// go first: their troops return soonest, so as many oases as the troops can sustain are hit every
-// wave, and far ones get what is left. A target is not raided twice within one cycle, and troops at
-// home are the other limit. Right before sending, each target is checked on the map again and only
-// oases that are still unoccupied and animal-free are sent.
-export async function runFarmLists(game, { waveMinutes = 10, cycleMinutes = 10 } = {}) {
-  const lists = (await game.farmLists()).filter(isAutoFarmList);
+// each list sends its targets again, whether or not earlier raids are back, so every target is
+// raided about once per `cycleMinutes`. Nearest targets go first: their troops return soonest, so as
+// many oases as the troops can sustain are hit every wave, and far ones get what is left. A target
+// is not raided twice within one cycle, and troops at home are the other limit. Right before
+// sending, each target is checked on the map again and only oases that are still unoccupied and
+// animal-free are sent. Returns a summary per list.
+export async function runFarmLists(game, cfg, villageList = null) {
+  const { everyMinutes: waveMinutes, cycleMinutes } = cfg.raid;
+  const lists = (await game.farmLists()).filter((l) => isAutoFarmList(l, cfg));
   if (!lists.length) {
-    game.log('No "Oases (auto)" farm lists yet; run farm-setup first.');
-    return;
+    game.log(`No "${cfg.raid.listPrefix}" farm lists yet; run farm-setup first.`);
+    return [];
   }
-  const lastSent = JSON.parse(await fs.readFile(RAID_STATE, 'utf8').catch(() => '{}'));
-  const villages = new Map((await game.villages()).map((v) => [v.did, v]));
+  const now = Date.now();
+  const stored = (await game.store?.get(RAID_STATE)) ?? {};
+  // Forget targets not sent for a day so the state does not grow forever.
+  const lastSent = Object.fromEntries(Object.entries(stored).filter(([, t]) => now - t < 86_400_000));
+  const villages = new Map((villageList ?? await game.villages()).map((v) => [v.did, v]));
   const tiles = new TileCache(game);
   const homes = new Map();
-  const now = Date.now();
   const fresh = (cycleMinutes - waveMinutes / 2) * 60_000;
+  const summary = [];
   for (const list of lists.filter((l) => l.slots.length)) {
     const did = list.ownerVillage.id;
     const owner = villages.get(did);
+    if (!owner) continue;
     if (!homes.has(did)) homes.set(did, { ...(list.ownerVillage.troops?.ownTroopsAtTown?.units ?? {}) });
     const home = homes.get(did);
     const dist = (s) => Math.hypot(s.target.x - owner.x, s.target.y - owner.y);
@@ -230,20 +240,23 @@ export async function runFarmLists(game, { waveMinutes = 10, cycleMinutes = 10 }
       send.push(slot);
     }
     const running = list.slots.filter((s) => s.isRunning).length;
-    const summary = `${running}/${list.slots.length} targets being raided`
+    const entry = {
+      list: list.name, village: list.ownerVillage.name, targets: list.slots.length, running, sent: 0, waiting: short, unsafe,
+    };
+    summary.push(entry);
+    const details = `${running}/${list.slots.length} targets being raided`
       + `${short ? `, ${short} waiting for troops` : ''}${unsafe ? `, ${unsafe} unsafe` : ''}`;
     if (!send.length) {
-      game.log(`${list.ownerVillage.name} "${list.name}": nothing to send this wave (${summary}).`);
+      game.log(`${list.ownerVillage.name} "${list.name}": nothing to send this wave (${details}).`);
       continue;
     }
     const results = await game.startFarmListTargets(list.id, send.map((s) => s.id));
     const failed = results.filter((r) => r.error);
     for (const r of results.filter((x) => !x.error)) lastSent[r.id] = now;
-    game.log(`${list.ownerVillage.name} "${list.name}": wave of ${results.length - failed.length}/${send.length}`
-      + `${failed.length ? `, not sent: ${[...new Set(failed.map((r) => JSON.stringify(r.error)))].join(', ')}` : ''} (${summary}).`);
+    entry.sent = results.length - failed.length;
+    game.log(`${list.ownerVillage.name} "${list.name}": wave of ${entry.sent}/${send.length}`
+      + `${failed.length ? `, not sent: ${[...new Set(failed.map((r) => JSON.stringify(r.error)))].join(', ')}` : ''} (${details}).`);
   }
-  if (!game.dryRun) {
-    await fs.mkdir('.auth', { recursive: true });
-    await fs.writeFile(RAID_STATE, JSON.stringify(lastSent));
-  }
+  if (!game.dryRun) await game.store?.set(RAID_STATE, lastSent);
+  return summary;
 }

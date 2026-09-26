@@ -1,0 +1,90 @@
+# Production stack for a VM. Copy this folder to the VM, fill in .env (see .env.example), then:
+#   docker compose up -d
+# Profiles (set COMPOSE_PROFILES in .env):
+#   local-db  run Postgres here (leave it out and set DATABASE_URL to use another database)
+#   https     run Caddy in front of the API with automatic HTTPS for API_DOMAIN
+
+services:
+  db:
+    image: postgres:16-alpine
+    profiles: [local-db]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-travian}
+      POSTGRES_USER: ${POSTGRES_USER:-travian}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ${IMAGE:-ghcr.io/s4shashank12/auto-travian:latest}
+    restart: unless-stopped
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # Defaults to the local-db service; set DATABASE_URL in .env to use another Postgres.
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-travian}:${POSTGRES_PASSWORD:-}@db:5432/${POSTGRES_DB:-travian}}
+      # Empty: follow sslmode in DATABASE_URL. See .env.example for the modes and certificates.
+      DATABASE_SSL: ${DATABASE_SSL:-}
+      DATABASE_SSL_CA: ${DATABASE_SSL_CA:-}
+      DATABASE_SSL_CERT: ${DATABASE_SSL_CERT:-}
+      DATABASE_SSL_KEY: ${DATABASE_SSL_KEY:-}
+      AUTOSTART: ${AUTOSTART:-true}
+      EVENTS_RETENTION_DAYS: ${EVENTS_RETENTION_DAYS:-7}
+      DATA_DIR: /data
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    volumes:
+      - data:/data
+      # Certificates for a database that needs them, e.g. DATABASE_SSL_CA=/certs/server-ca.pem.
+      - ./certs:/certs:ro
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+    ports:
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8080}:8080"
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+  # Pulls a newer backend image from GHCR every WATCHTOWER_POLL_INTERVAL seconds and restarts
+  # the backend with it. Only containers labelled for Watchtower are touched.
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    command: --label-enable --cleanup
+    environment:
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-300}
+      # Newer Docker engines reject the old API version Watchtower asks for by default.
+      DOCKER_API_VERSION: ${DOCKER_API_VERSION:-1.44}
+      # Only needed while the GHCR package is private (a token with read:packages).
+      REPO_USER: ${GHCR_USER:-}
+      REPO_PASS: ${GHCR_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  data:
+  caddy_data:
+  caddy_config:
