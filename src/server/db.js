@@ -34,6 +34,23 @@ const MIGRATIONS = [
    );
    create index events_server_id on events (server_id, id);
    create index events_ts on events (ts);`,
+  // Daily copies of the game world's map.sql, for finding inactive players.
+  `create table world_villages (
+     server_id integer not null references servers(id) on delete cascade,
+     day date not null,
+     vid integer not null,
+     x integer not null,
+     y integer not null,
+     tid integer,
+     name text,
+     uid integer,
+     player text,
+     aid integer,
+     alliance text,
+     population integer,
+     capital boolean,
+     primary key (server_id, day, vid)
+   );`,
 ];
 
 export function createPool(env) {

@@ -78,6 +78,34 @@ export const DEFAULT_CONFIG = {
     ],
   },
 
+  // Raiding inactive players (off by default). A player is inactive when their total population
+  // has not grown for `days` days, judged from the game world's daily map.sql.
+  inactive: {
+    enabled: false,
+    days: 3,
+    radius: 25, // fields from one of our villages
+    minPop: 1, // village population range to raid
+    maxPop: 800,
+    excludeOwnAlliance: true,
+    excludeAlliances: [], // alliance tags, e.g. ["NAP1", "WING"]
+    excludePlayers: [], // player names
+    excludeTribes: [4, 5], // 4 nature, 5 Natars
+    villages: [], // names of our villages that raid them; empty means any with the units
+    units: [ // preference order: each raiding village uses the first it has enough of
+      { unit: 't5', perSlot: 10 },
+      { unit: 't6', perSlot: 10 },
+      { unit: 't3', perSlot: 20 },
+      { unit: 't1', perSlot: 20 },
+    ],
+    maxTargets: 100, // per raiding village
+    listPrefix: 'Inactives (auto)',
+    listSize: 100,
+    everyMinutes: 60, // one raid on every target this often
+    hours: '', // only raid in these hours, e.g. "6-23" (empty means any time)
+    timezone: 'UTC', // for hours, e.g. "Asia/Dhaka"
+    keepDays: 14, // world snapshots kept
+  },
+
   loop: {
     minMinutes: 20, // idle wait between rounds when nothing else is due
     maxMinutes: 40,
@@ -133,6 +161,22 @@ export const CONFIG_FIELDS = [
   { section: 'Raiding', path: 'raid.listPrefix', type: 'string', label: 'Bot farm list name prefix' },
   { section: 'Raiding', path: 'raid.listSize', type: 'number', label: 'Targets per list' },
   { section: 'Raiding', path: 'raid.units', type: 'json', label: 'Raiding units (slowest first)' },
+  { section: 'Inactive players', path: 'inactive.enabled', type: 'boolean', label: 'Raid inactive players', help: 'Off by default.' },
+  { section: 'Inactive players', path: 'inactive.days', type: 'number', label: 'No growth for (days)' },
+  { section: 'Inactive players', path: 'inactive.radius', type: 'number', label: 'Within (fields)' },
+  { section: 'Inactive players', path: 'inactive.minPop', type: 'number', label: 'Village population from' },
+  { section: 'Inactive players', path: 'inactive.maxPop', type: 'number', label: 'Village population to' },
+  { section: 'Inactive players', path: 'inactive.everyMinutes', type: 'number', label: 'Raid each target every (minutes)' },
+  { section: 'Inactive players', path: 'inactive.hours', type: 'string', label: 'Only in hours', help: 'e.g. 6-23; empty means any time.' },
+  { section: 'Inactive players', path: 'inactive.timezone', type: 'string', label: 'Timezone for hours', help: 'e.g. UTC or Asia/Dhaka' },
+  { section: 'Inactive players', path: 'inactive.maxTargets', type: 'number', label: 'Targets per village' },
+  { section: 'Inactive players', path: 'inactive.excludeOwnAlliance', type: 'boolean', label: 'Skip own alliance' },
+  { section: 'Inactive players', path: 'inactive.excludeAlliances', type: 'json', label: 'Skip alliances', help: '["TAG1", "TAG2"]' },
+  { section: 'Inactive players', path: 'inactive.excludePlayers', type: 'json', label: 'Skip players', help: '["name"]' },
+  { section: 'Inactive players', path: 'inactive.excludeTribes', type: 'json', label: 'Skip tribes', help: '4 nature, 5 Natars' },
+  { section: 'Inactive players', path: 'inactive.villages', type: 'json', label: 'Raid from villages', help: 'Names; empty means any with the units.' },
+  { section: 'Inactive players', path: 'inactive.units', type: 'json', label: 'Units per raid (preference order)' },
+  { section: 'Inactive players', path: 'inactive.listPrefix', type: 'string', label: 'Farm list name prefix' },
   { section: 'Loop', path: 'loop.minMinutes', type: 'number', label: 'Idle wait from (minutes)' },
   { section: 'Loop', path: 'loop.maxMinutes', type: 'number', label: 'Idle wait to (minutes)' },
   { section: 'Loop', path: 'loop.floorMinutes', type: 'number', label: 'Shortest wait (minutes)' },

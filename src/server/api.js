@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import { CONFIG_FIELDS, DEFAULT_CONFIG, resolveConfig } from '../config.js';
+import { findInactives } from '../world.js';
+import { pgWorld } from './repo.js';
 import { safeEqual } from './crypto.js';
 import { ValidationError, validateServer } from './validate.js';
 import { ACTIONS } from './worker.js';
@@ -164,6 +166,17 @@ export function createApp({
     if (!row) return;
     const after = req.query.after != null ? Number(req.query.after) : null;
     res.json(await repo.listEvents(row.id, { after: Number.isFinite(after) ? after : null, limit: req.query.limit }));
+  }));
+
+  // Inactive players near this account's villages, from the stored world data. Works before
+  // inactive raiding is switched on, so the list can be reviewed first.
+  app.get('/api/servers/:id/inactives', wrap(async (req, res) => {
+    const row = await found(req, res);
+    if (!row) return;
+    const villages = row.snapshot?.villages ?? [];
+    if (!villages.length) return res.json({ ready: false, reason: 'no-villages', targets: [], players: [] });
+    const result = await findInactives(pgWorld(pool, row.id), villages, resolveConfig(row.config));
+    return res.json({ ...result, targets: result.targets.slice(0, 500) });
   }));
 
   const shotDir = (id) => path.join(env.dataDir, 'screenshots', String(id));

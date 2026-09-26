@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   hostOf, navigate, timeAgo, timeUntil, usePoll,
 } from '../util.js';
+import Inactives from './Inactives.jsx';
 import Logs from './Logs.jsx';
 import Overview from './Overview.jsx';
 import Screenshots from './Screenshots.jsx';
@@ -11,6 +12,7 @@ import StatusBadge from './StatusBadge.jsx';
 
 const TABS = [
   ['overview', 'Overview'],
+  ['inactives', 'Inactive players'],
   ['logs', 'Logs'],
   ['settings', 'Settings'],
   ['screenshots', 'Screenshots'],
@@ -23,6 +25,8 @@ const ACTION_LABELS = {
   raid: 'Raid wave now',
   'farm-setup': 'Farm list setup',
   villages: 'Refresh villages',
+  world: 'Import world data',
+  'inactive-raid': 'Raid inactives now',
 };
 
 export default function ServerDetail({
@@ -95,6 +99,7 @@ export default function ServerDetail({
       </nav>
 
       {tab === 'overview' && <Overview snapshot={server.snapshot} config={server.effectiveConfig} />}
+      {tab === 'inactives' && <Inactives client={client} server={server} onChanged={refresh} />}
       {tab === 'logs' && <Logs client={client} id={id} />}
       {tab === 'settings' && <Settings client={client} meta={meta} server={server} onSaved={refresh} />}
       {tab === 'screenshots' && <Screenshots client={client} id={id} />}

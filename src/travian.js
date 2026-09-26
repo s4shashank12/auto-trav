@@ -338,6 +338,17 @@ export class Travian {
     return true;
   }
 
+  // Downloads a text file from the game world (for example /map.sql) with the browser session.
+  async fetchText(pathname) {
+    if (!this.page.url().startsWith(this.server)) await this.goto('/dorf1.php');
+    const res = await this.page.evaluate(async (url) => {
+      const r = await fetch(url);
+      return { status: r.status, text: await r.text() };
+    }, pathname);
+    if (res.status !== 200) throw new Error(`${pathname} returned ${res.status}`);
+    return res.text;
+  }
+
   // Stock, free merchants and merchant movements of every own village, in one request.
   async economy() {
     const data = await this.graphql(`{ownPlayer{villages{id name

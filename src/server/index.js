@@ -15,7 +15,7 @@ async function main() {
   const pool = createPool(env);
   await migrate(pool);
   const repo = makeRepo(pool, makeCipher(env.appSecret));
-  const manager = new BotManager({ repo, env });
+  const manager = new BotManager({ repo, env, pool });
   const app = createApp({
     repo, manager, env, pool,
   });

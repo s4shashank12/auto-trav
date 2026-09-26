@@ -4,8 +4,9 @@ import { BotWorker } from './worker.js';
 // Owns one Chromium shared by every account (each gets its own browser context) and one worker
 // per server row.
 export class BotManager {
-  constructor({ repo, env }) {
+  constructor({ repo, env, pool }) {
     this.repo = repo;
+    this.pool = pool;
     this.env = env;
     this.workers = new Map();
     this.browser = null;
@@ -31,6 +32,7 @@ export class BotManager {
     if (!this.workers.has(id)) {
       this.workers.set(id, new BotWorker(id, {
         repo: this.repo,
+        pool: this.pool,
         getBrowser: () => this.getBrowser(),
         dataDir: this.env.dataDir,
       }));

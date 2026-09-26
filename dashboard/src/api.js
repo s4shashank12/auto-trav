@@ -68,6 +68,7 @@ export function createClient({ url, token }) {
     start: (id) => request('POST', `/api/servers/${id}/start`),
     stop: (id) => request('POST', `/api/servers/${id}/stop`),
     action: (id, action) => request('POST', `/api/servers/${id}/actions`, { action }),
+    inactives: (id) => request('GET', `/api/servers/${id}/inactives`),
     events: (id, after) => request('GET', `/api/servers/${id}/events${after != null ? `?after=${after}` : '?limit=300'}`),
     screenshots: (id) => request('GET', `/api/servers/${id}/screenshots`),
     async screenshotUrl(id, file) {

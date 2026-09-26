@@ -108,6 +108,55 @@ export function makeRepo(pool, cipher) {
   };
 }
 
+const WORLD_COLUMNS = ['vid', 'x', 'y', 'tid', 'name', 'uid', 'player', 'aid', 'alliance', 'population', 'capital'];
+const WORLD_TYPES = ['int', 'int', 'int', 'int', 'text', 'int', 'text', 'int', 'text', 'int', 'bool'];
+
+// Daily world snapshots (map.sql) for one server, as the bot's world store (src/world.js).
+export const pgWorld = (pool, id) => ({
+  async days() {
+    return (await pool.query(
+      "select distinct to_char(day, 'YYYY-MM-DD') as day from world_villages where server_id = $1 order by 1",
+      [id],
+    )).rows.map((r) => r.day);
+  },
+  async getDay(day) {
+    return (await pool.query(
+      `select ${WORLD_COLUMNS.join(', ')} from world_villages where server_id = $1 and day = $2`,
+      [id, day],
+    )).rows;
+  },
+  async saveDay(day, rows) {
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      await client.query('delete from world_villages where server_id = $1 and day = $2', [id, day]);
+      for (let i = 0; i < rows.length; i += 2000) {
+        const chunk = rows.slice(i, i + 2000);
+        const params = WORLD_COLUMNS.map((c) => chunk.map((r) => r[c] ?? null));
+        const unnest = WORLD_TYPES.map((t, k) => `$${k + 3}::${t}[]`).join(', ');
+        await client.query(
+          `insert into world_villages (server_id, day, ${WORLD_COLUMNS.join(', ')})
+           select $1, $2, * from unnest(${unnest})`,
+          [id, day, ...params],
+        );
+      }
+      await client.query('commit');
+    } catch (err) {
+      await client.query('rollback');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+  async prune(keepDays) {
+    await pool.query(
+      `delete from world_villages where server_id = $1 and day not in (
+         select distinct day from world_villages where server_id = $1 order by day desc limit $2)`,
+      [id, keepDays],
+    );
+  },
+});
+
 // Adapters giving the bot (src/travian.js) its login and state storage in Postgres.
 export const pgSession = (repo, id) => ({
   load: () => repo.loadSession(id),

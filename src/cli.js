@@ -9,6 +9,7 @@ import { canDevelop } from './rules.js';
 import { Runner } from './runner.js';
 import { FileStore } from './stores.js';
 import { CaptchaError, Travian } from './travian.js';
+import { FileWorldStore, findInactives } from './world.js';
 
 const USAGE = `Usage: auto-travian <command>
 
@@ -17,6 +18,9 @@ Commands:
   build              Develop the villages under the population limit
   farm-setup         Fill the bot's farm lists with empty, unoccupied oases
   raid               Send one raid wave from the bot's farm lists
+  world              Import today's world data (map.sql); update inactive lists if enabled
+  inactives          List inactive players' villages near yours (needs a few days of world data)
+  inactive-raid      Raid the inactive farm lists now
   train              Keep barracks/stables in big villages training
   play               build + train + raid
   --loop             Repeat play (or another command) until stopped
@@ -27,7 +31,7 @@ bot.config.json (overrides of src/config.js) plus HEADLESS=false, DRY_RUN=true, 
 RAID_RADIUS, RAID_EVERY_MINUTES, RAID_CYCLE_MINUTES, TRAIN_EVERY_MINUTES, LOOP_MIN_MINUTES,
 LOOP_MAX_MINUTES, LOOP_FLOOR_MINUTES.`;
 
-const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'play', 'screenshot'];
+const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'play', 'screenshot', 'world', 'inactives', 'inactive-raid'];
 const env = process.env;
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const LOCK_FILE = '.auth/bot.lock';
@@ -83,7 +87,8 @@ async function main() {
     store: new FileStore('.auth'),
     log,
   });
-  const runner = new Runner(game, cfg);
+  const world = new FileWorldStore('.auth/world');
+  const runner = new Runner(game, cfg, { world });
 
   // Returns seconds until the next build job finishes, when known, so --loop can wake up for it.
   const run = async () => {
@@ -91,6 +96,15 @@ async function main() {
       await runner.action('villages');
       for (const v of runner.snapshot.villages) {
         console.log(`${v.name.padEnd(14)} (${v.x}|${v.y})  pop ${String(v.population).padStart(5)}  ${canDevelop(v, cfg) ? 'develop' : 'no building'}${v.capital ? '  capital' : ''}`);
+      }
+      return null;
+    }
+    if (command === 'inactives') {
+      await runner.action('villages');
+      const found = await findInactives(world, runner.snapshot.villages, cfg);
+      if (!found.ready) console.log(`Need ${found.needDays} days of world data (have ${found.days}); run "world" once a day.`);
+      for (const t of found.targets.slice(0, 50)) {
+        console.log(`${String(t.dist).padStart(5)}  (${t.x}|${t.y})  ${t.village} — ${t.player} [${t.alliance ?? ''}] pop ${t.population}, player ${t.playerChange >= 0 ? '+' : ''}${t.playerChange}`);
       }
       return null;
     }

@@ -2,17 +2,20 @@ import path from 'node:path';
 import { resolveConfig } from '../config.js';
 import { Runner } from '../runner.js';
 import { CaptchaError, Travian } from '../travian.js';
-import { pgSession, pgStore } from './repo.js';
+import { pgSession, pgStore, pgWorld } from './repo.js';
 
-export const ACTIONS = ['villages', 'build', 'train', 'raid', 'farm-setup'];
+export const ACTIONS = ['villages', 'build', 'train', 'raid', 'farm-setup', 'world', 'inactive-raid'];
 
 // Plays one Travian account (a "server" row): rounds on a timer while running, plus one-off
 // actions from the dashboard. Everything that touches the game goes through exclusive(), so a
 // round and an action never drive the browser at the same time.
 export class BotWorker {
-  constructor(serverId, { repo, getBrowser, dataDir }) {
+  constructor(serverId, {
+    repo, pool, getBrowser, dataDir,
+  }) {
     this.id = serverId;
     this.repo = repo;
+    this.pool = pool;
     this.getBrowser = getBrowser;
     this.dataDir = dataDir;
     this.name = `server ${serverId}`;
@@ -63,7 +66,7 @@ export class BotWorker {
         log: (m) => this.log(m),
       });
       await this.game.start();
-      this.runner = new Runner(this.game, cfg);
+      this.runner = new Runner(this.game, cfg, { world: pgWorld(this.pool, this.id) });
     }
     // Settings changes apply from the next round on, keeping the wave and training timers.
     this.game.dryRun = cfg.dryRun;
