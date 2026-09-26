@@ -7,7 +7,9 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { tribeUnits } from '../game.js';
 import { timeAgo } from '../util.js';
-import { Icon, Stepper, useDragSensors } from './ui.jsx';
+import {
+  Icon, Meter, Stepper, useDragSensors,
+} from './ui.jsx';
 
 // Farm list names are at most 30 characters, so long unit names get initials there.
 const shortName = (name) => (name.length <= 17 ? name : name.split(/\s+/).map((w) => w[0]).join('').toUpperCase());
@@ -173,6 +175,96 @@ function FarmLists({
   );
 }
 
+const HERO_NUMBERS = [
+  ['heroRaid.radius', 'Oases within', 'fields', 1, 100],
+  ['heroRaid.minHealth', 'Leave with at least', '% health', 1, 100],
+  ['heroRaid.maxLoss', 'Lose at most per oasis', '% health', 1, 99],
+];
+
+// The hero's own outings: adventures first, then the oasis with the most animals it can clear.
+function Hero({
+  server, draft, onAction, canSend,
+}) {
+  const on = Boolean(draft.value('features.heroRaid'));
+  const st = server.snapshot?.hero;
+  const busy = server.statusMessage === 'action: hero';
+  const action = st?.action;
+  return (
+    <section className="card">
+      <div className="card-head">
+        <div>
+          <h3><Icon name="shield" /> Hero</h3>
+          <p className="muted small">
+            While the hero is home and healthy it goes on an adventure whenever one is open. Otherwise it clears the unoccupied
+            oasis with the most animals it can beat, judged from its fighting strength against the animals' defence.
+          </p>
+        </div>
+        <div className="list-card-controls">
+          <label className="switch">
+            <input type="checkbox" checked={on} onChange={(e) => draft.change('features.heroRaid', e.target.checked)} />
+            <span>Send the hero out</span>
+          </label>
+          {canSend && (
+            <button type="button" className="btn small" disabled={draft.dirty || busy} onClick={() => onAction('hero', 'Sending the hero… Follow it in Logs.')}>
+              <Icon name="play" size={14} /> Send hero now
+            </button>
+          )}
+        </div>
+      </div>
+      <div className={`hero-settings ${on ? '' : 'is-off'}`}>
+        <div className="row wrap">
+          <label className="switch">
+            <input type="checkbox" checked={Boolean(draft.value('heroRaid.adventures'))} onChange={(e) => draft.change('heroRaid.adventures', e.target.checked)} />
+            <span>Adventures first</span>
+          </label>
+          <label className="switch">
+            <input type="checkbox" checked={Boolean(draft.value('heroRaid.oases'))} onChange={(e) => draft.change('heroRaid.oases', e.target.checked)} />
+            <span>Then clear oases of animals</span>
+          </label>
+        </div>
+        <div className="inline-settings">
+          {HERO_NUMBERS.map(([path, label, unit, min, max]) => (
+            <label key={path}>
+              <span className="muted small">{label}</span>
+              <span className="row">
+                <Stepper value={draft.value(path) ?? min} min={min} max={max} onChange={(v) => draft.change(path, v)} label={label} />
+                <span className="muted small">{unit}</span>
+              </span>
+            </label>
+          ))}
+          <label>
+            <span className="muted small">At the oasis</span>
+            <select value={draft.value('heroRaid.mode') ?? 'raid'} onChange={(e) => draft.change('heroRaid.mode', e.target.value)}>
+              <option value="raid">Raid (loses less health)</option>
+              <option value="attack">Attack (kills every animal)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      {st && (
+        <div className="hero-status">
+          <div className="hero-health">
+            <span className="small">Health {st.health}%</span>
+            <Meter value={st.health ?? 0} max={100} label="Hero health" />
+          </div>
+          <p className="small muted">
+            {st.home ? `Home: ${st.home}` : ''}
+            {st.adventures ? ` · ${st.adventures} adventure${st.adventures > 1 ? 's' : ''} open` : ' · no adventures open'}
+            {st.at ? ` · checked ${timeAgo(st.at)}` : ''}
+          </p>
+          {action?.type === 'adventure' && <p className="small st st-good"><Icon name="play" size={12} /> Sent on an adventure at ({action.x}|{action.y})</p>}
+          {action?.type === 'oasis' && (
+            <p className="small st st-good">
+              <Icon name="target" size={12} /> Sent to {action.mode === 'attack' ? 'attack' : 'raid'} the oasis at ({action.x}|{action.y}): {action.animals} (about {action.loss}% health)
+            </p>
+          )}
+          {!action && st.note && <p className="small st st-muted"><Icon name="pause" size={12} /> {st.note}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 const NUMBERS = [
   ['raid.everyMinutes', 'Send a wave every', 'min', 1, 120],
   ['raid.radius', 'Oases within', 'fields', 5, 200],
@@ -180,7 +272,7 @@ const NUMBERS = [
 ];
 
 export default function Raiding({
-  draft, server, onAction, canRebuild,
+  draft, server, onAction, canRebuild, canSendHero,
 }) {
   const tribe = server.snapshot?.tribe ?? null;
   const fighters = tribeUnits(tribe).filter((u) => ['foot', 'horse'].includes(u.kind));
@@ -202,6 +294,7 @@ export default function Raiding({
         </div>
       </section>
       <FarmLists server={server} draft={draft} onAction={onAction} canRebuild={canRebuild} />
+      <Hero server={server} draft={draft} onAction={onAction} canSend={canSendHero} />
       <div className="two-col">
         <UnitList
           id="raid"

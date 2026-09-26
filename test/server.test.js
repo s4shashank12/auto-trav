@@ -28,6 +28,13 @@ test('validateConfig accepts known settings and rejects the rest', () => {
   assert.throws(() => validateConfig({ build: { populationLimit: Infinity } }), /finite/);
 });
 
+test('validateConfig checks choices and ranges', () => {
+  assert.doesNotThrow(() => validateConfig({ heroRaid: { mode: 'attack', radius: 20 } }));
+  assert.throws(() => validateConfig({ heroRaid: { mode: 'siege' } }), /raid, attack/);
+  assert.throws(() => validateConfig({ heroRaid: { maxLoss: 100 } }), /between 1 and 99/);
+  assert.throws(() => validateConfig({ smithy: { maxLevel: 25 } }), /between 1 and 20/);
+});
+
 test('validateServer', () => {
   const ok = validateServer({
     name: ' A ', url: 'https://ts4.x1.international.travian.com/dorf1.php', username: 'u', password: 'p',

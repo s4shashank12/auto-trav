@@ -14,6 +14,7 @@ export const DEFAULT_CONFIG = {
     raid: true, // send farm list waves
     research: true, // research units in the Academy (see research below)
     smithy: true, // improve units in the Smithy (see smithy below)
+    heroRaid: false, // send the hero on adventures, else to clear oases of animals (see heroRaid below)
   },
 
   build: {
@@ -72,6 +73,19 @@ export const DEFAULT_CONFIG = {
     units: [], // e.g. ["t3", "t6"]
     overrides: {}, // per village name: a list that replaces the default one
     maxLevel: 20,
+  },
+
+  // The hero's own outings, checked every round while it is home: an adventure whenever one is
+  // open (normal before hard, nearest first), otherwise the unoccupied oasis with the most animals
+  // within `radius` fields of its home village that it can clear losing at most `maxLoss` health
+  // (estimated from its fighting strength and the animals' defence).
+  heroRaid: {
+    adventures: true, // adventures come first
+    oases: true, // then oases with animals
+    radius: 15, // fields from the hero's home village
+    minHealth: 50, // the hero only leaves with at least this much health (%)
+    maxLoss: 25, // skip oases that would cost it more health than this (%)
+    mode: 'raid', // 'raid' or 'attack' (an attack kills every animal, a raid loses less health)
   },
 
   reinforce: {
@@ -157,6 +171,7 @@ export const CONFIG_FIELDS = [
   { section: 'General', path: 'features.raid', type: 'boolean', label: 'Raid oases' },
   { section: 'General', path: 'features.research', type: 'boolean', label: 'Research units in the Academy' },
   { section: 'General', path: 'features.smithy', type: 'boolean', label: 'Improve units in the Smithy' },
+  { section: 'General', path: 'features.heroRaid', type: 'boolean', label: 'Send the hero on adventures and oasis raids' },
   { section: 'Building', path: 'build.populationLimit', type: 'number', label: 'Population limit', help: 'Villages at or above this are not built in.' },
   { section: 'Building', path: 'build.queueMax', type: 'number', label: 'Queue length', help: '3 for Romans with Plus, 2 without.' },
   { section: 'Building', path: 'build.cropFirstBelow', type: 'number', label: 'Cropland first below (crop/h)' },
@@ -179,6 +194,12 @@ export const CONFIG_FIELDS = [
   { section: 'Smithy', path: 'smithy.units', type: 'json', label: 'Units to improve', help: '["t3", "t6"]' },
   { section: 'Smithy', path: 'smithy.overrides', type: 'json', label: 'Per-village upgrades', help: '{ "Village": ["t3"] }' },
   { section: 'Smithy', path: 'smithy.maxLevel', type: 'number', label: 'Improve up to level' },
+  { section: 'Hero', path: 'heroRaid.adventures', type: 'boolean', label: 'Go on adventures first' },
+  { section: 'Hero', path: 'heroRaid.oases', type: 'boolean', label: 'Otherwise clear oases of animals' },
+  { section: 'Hero', path: 'heroRaid.radius', type: 'number', label: 'Oases within (fields)' },
+  { section: 'Hero', path: 'heroRaid.minHealth', type: 'number', label: 'Leave with at least (% health)' },
+  { section: 'Hero', path: 'heroRaid.maxLoss', type: 'number', label: 'Lose at most (% health per oasis)' },
+  { section: 'Hero', path: 'heroRaid.mode', type: 'string', label: 'Oasis mission', help: 'raid or attack' },
   { section: 'Reinforcement', path: 'reinforce.target', type: 'string', label: 'Target village', help: 'Empty means the capital.' },
   { section: 'Reinforcement', path: 'reinforce.cropLow', type: 'number', label: 'Reinforce below (crop/h)' },
   { section: 'Reinforcement', path: 'reinforce.cropTarget', type: 'number', label: 'Until back to (crop/h)' },

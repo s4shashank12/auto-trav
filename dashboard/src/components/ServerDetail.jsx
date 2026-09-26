@@ -33,6 +33,7 @@ const ACTIONS = {
   train: ['Research & train now', 'Top up training queues'],
   research: ['Research now', 'Start missing Academy research'],
   smithy: ['Improve in Smithy', 'Start the next weapons and armour upgrade'],
+  hero: ['Send hero', 'An adventure first, else an oasis with animals'],
   raid: ['Send a raid wave', 'From the oasis farm lists'],
   'farm-setup': ['Set up farm lists', 'Find and add empty oases'],
   'farm-rebuild': ['Rebuild farm lists', 'Empty the bot\'s lists and fill them again'],
@@ -124,6 +125,7 @@ export default function ServerDetail({
           {...editorProps}
           onAction={(a, message) => run(() => client.action(id, a), message)}
           canRebuild={(meta.actions ?? []).includes('farm-rebuild')}
+          canSendHero={(meta.actions ?? []).includes('hero')}
         />
       )}
       {tab === 'inactives' && <Inactives client={client} server={server} onChanged={refresh} />}

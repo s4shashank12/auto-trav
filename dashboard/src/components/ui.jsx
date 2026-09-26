@@ -29,6 +29,7 @@ const PATHS = {
   hammer: 'M13 4l7 7-2.5 2.5-2-2-8.8 8.8a1.6 1.6 0 0 1-2.3-2.3L13.2 9.2l-2.7-2.7Z',
   target: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM12 12h.01',
   refresh: 'M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5',
+  shield: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6Z',
 };
 
 export function Icon({ name, size = 16, className = '' }) {

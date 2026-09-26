@@ -7,6 +7,12 @@ const MAP_PATHS = new Set(['train.units', 'train.overrides', 'research.overrides
 
 const kind = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
 
+// Settings limited to a few values, and numbers limited to a range.
+const CHOICES = { 'heroRaid.mode': ['raid', 'attack'] };
+const RANGES = {
+  'heroRaid.radius': [1, 100], 'heroRaid.minHealth': [1, 100], 'heroRaid.maxLoss': [1, 99], 'smithy.maxLevel': [1, 20],
+};
+
 // Checks that config overrides only use known settings with the right types.
 export function validateConfig(overrides, defaults = DEFAULT_CONFIG, prefix = '') {
   if (kind(overrides) !== 'object') throw new ValidationError(`${prefix || 'config'} must be an object`);
@@ -16,6 +22,9 @@ export function validateConfig(overrides, defaults = DEFAULT_CONFIG, prefix = ''
     const expected = kind(defaults[key]);
     if (kind(value) !== expected) throw new ValidationError(`"${pathName}" must be ${expected === 'array' ? 'an array' : `a ${expected}`}`);
     if (expected === 'number' && !Number.isFinite(value)) throw new ValidationError(`"${pathName}" must be a finite number`);
+    if (CHOICES[pathName] && !CHOICES[pathName].includes(value)) throw new ValidationError(`"${pathName}" must be one of ${CHOICES[pathName].join(', ')}`);
+    const range = RANGES[pathName];
+    if (range && (value < range[0] || value > range[1])) throw new ValidationError(`"${pathName}" must be between ${range[0]} and ${range[1]}`);
     if (expected === 'object' && !MAP_PATHS.has(pathName)) validateConfig(value, defaults[key], pathName);
   }
   return overrides;

@@ -333,6 +333,19 @@ changes them per account; only the changed values are stored.
     and every 6 hours once everything is at the cap. "Run now → Improve in Smithy" checks every
     village at once; `node src/cli.js smithy` does the same. Switch it off under Settings
     ("Improve units in the Smithy").
+- **Hero** (off until you switch on "Send the hero out" on the Raiding tab):
+  - Every round, while the hero is home, alive and has at least `heroRaid.minHealth` (50%)
+    health, it goes on an adventure if one is open (normal before hard, nearest first).
+  - With no adventure open it clears an unoccupied oasis within `heroRaid.radius` (15) fields of
+    its home village: the one with the most animals among those it can beat losing at most
+    `heroRaid.maxLoss` (25%) health. The loss is estimated from the hero's fighting strength
+    against the animals' infantry or cavalry defence (cavalry when it rides a horse), leaving
+    armour out, so it errs on the safe side. `heroRaid.mode` picks a raid (less health lost) or
+    an attack (every animal killed).
+  - The order goes through the rally point and is only confirmed when the game's confirmation
+    shows exactly that: an unoccupied oasis, the right target, the hero alone. When nothing
+    qualifies, the map is left alone for half an hour. "Run now → Send hero" (or
+    `node src/cli.js hero`) looks at once.
 - **Reinforcement:** a village whose crop would drop under 200/h stops training and sends
   troops to the capital (or `reinforce.target`), until it is back to 600/h. That happens only
   while the target keeps at least 2,000/h.

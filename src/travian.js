@@ -172,22 +172,35 @@ export class Travian {
     this.loggedIn = true;
   }
 
-  // Calls the same JSON endpoints the game's own pages use, with the logged-in session.
-  async api(pathname, body, method = 'POST') {
-    const res = await this.page.evaluate(async ([url, payload, verb]) => {
-      const r = await fetch(url, {
-        method: verb,
-        headers: { 'content-type': 'application/json; charset=UTF-8' },
-        body: JSON.stringify(payload),
-      });
-      return { status: r.status, text: await r.text() };
-    }, [pathname, body, method]);
+  // Calls the same JSON endpoints the game's own pages use, with the logged-in session. The game
+  // reloads its page when a countdown on it ends, which cuts off a request made through it; with
+  // `read` (a request that changes nothing) it is simply asked again. Orders are never repeated.
+  async api(pathname, body, method = 'POST', { read = false } = {}) {
+    let res;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        res = await this.page.evaluate(async ([url, payload, verb]) => {
+          const r = await fetch(url, {
+            method: verb,
+            headers: { 'content-type': 'application/json; charset=UTF-8' },
+            body: JSON.stringify(payload),
+          });
+          return { status: r.status, text: await r.text() };
+        }, [pathname, body, method]);
+        break;
+      } catch (err) {
+        if (!read || attempt >= 3 || !/Execution context was destroyed|Failed to fetch|navigat/i.test(err.message)) throw err;
+        await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+        await this.pause(500, 1000);
+      }
+    }
     if (res.status < 200 || res.status > 299) throw new Error(`${pathname} returned ${res.status}: ${res.text.slice(0, 200)}`);
     return res.text ? JSON.parse(res.text) : null;
   }
 
+  // Queries only (the bot sends no GraphQL mutations), so they are safe to repeat.
   async graphql(query, variables = {}) {
-    const res = await this.api('/api/v1/graphql', { query, variables });
+    const res = await this.api('/api/v1/graphql', { query, variables }, 'POST', { read: true });
     if (res.errors?.length) throw new Error(`GraphQL error: ${res.errors.map((e) => e.message).join('; ')}`);
     return res.data;
   }
@@ -633,6 +646,96 @@ export class Travian {
     return (await this.page.locator('#build.gid13').count()) > 0 && (await offered.count()) === 0;
   }
 
+  // The hero: alive, health, home village, where it is now and the adventures open to it, with
+  // the query the game's adventure page uses (no page load).
+  async heroStatus() {
+    const data = await this.graphql(`{ownPlayer{hero{isAlive health isRegenerating
+      homeVillage{id name x y}
+      status{status inVillage{id name} arrivalIn onWayTo{x y}}
+      adventures{number mapId x y distance difficulty travelingDuration}}}}`);
+    const h = data.ownPlayer.hero;
+    const where = h.status?.inVillage;
+    return {
+      isAlive: Boolean(h.isAlive),
+      health: h.health ?? 0,
+      homeVillage: h.homeVillage,
+      home: Boolean(where && h.homeVillage && where.id === h.homeVillage.id && !h.status?.onWayTo),
+      away: where && where.id !== h.homeVillage?.id ? `in ${where.name}` : h.status?.onWayTo ? `on the way to (${h.status.onWayTo.x}|${h.status.onWayTo.y})` : null,
+      adventures: h.adventures ?? [],
+    };
+  }
+
+  // The hero's fighting strength and whether it rides (a horse makes it fight as cavalry).
+  async heroPower() {
+    const res = await this.api('/api/v1/hero/v2/screen/attributes', undefined, 'GET', { read: true });
+    return { power: res?.hero?.attributes?.power?.value ?? null, mounted: Boolean(res?.hero?.equipment?.horse) };
+  }
+
+  // Sends the hero on adventure `number` with the two requests the adventure page sends: a
+  // preview that returns a one-time nonce, then the order with that nonce.
+  async startAdventure(number) {
+    const payload = { action: 'troopsSend', eventType: 50, troops: [{ t11: 1 }], target: { adventureId: number } };
+    if (this.dryRun) {
+      this.log(`[dry run] would send the hero on adventure ${number}`);
+      return null;
+    }
+    const res = await this.page.evaluate(async (body) => {
+      const headers = { 'content-type': 'application/json; charset=UTF-8' };
+      const preview = await fetch('/api/v1/troop/send', { method: 'PUT', headers, body: JSON.stringify(body) });
+      const nonce = preview.headers.get('x-nonce');
+      const previewText = await preview.text();
+      if (!preview.ok || !nonce) return { error: `preview returned ${preview.status}: ${previewText.slice(0, 200)}` };
+      const sent = await fetch('/api/v1/troop/send', { method: 'POST', headers: { ...headers, 'X-Nonce': nonce }, body: JSON.stringify(body) });
+      const text = await sent.text();
+      return sent.ok ? { result: text ? JSON.parse(text) : {} } : { error: `send returned ${sent.status}: ${text.slice(0, 200)}` };
+    }, payload);
+    if (res.error) throw new Error(`Adventure ${number}: ${res.error}`);
+    await this.pause();
+    return { arrivalIn: res.result?.troops?.[0]?.arrivalIn ?? null };
+  }
+
+  // Sends the hero alone from village `did` to raid (or attack) the unoccupied oasis at (x|y),
+  // through the rally point. The confirmation page must show exactly that before it is confirmed:
+  // the raid type, the target, only the hero, from this village, against an unoccupied oasis.
+  async sendHeroTo(did, { x, y }, mode = 'raid') {
+    const eventType = mode === 'attack' ? '3' : '4';
+    await this.goto(`/build.php?newdid=${did}&id=${RALLY_POINT}&gid=16&tt=2`);
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to send the hero: village ${active} is active, expected ${did}`);
+    const hero = this.page.locator('input[name="troop[t11]"]');
+    if (!(await hero.count()) || (await hero.isDisabled())) throw new Error('The hero is not available in the rally point');
+    await hero.fill('1');
+    await this.page.fill('input[name="x"]', String(x));
+    await this.page.fill('input[name="y"]', String(y));
+    await this.page.check(`input[name="eventType"][value="${eventType}"]`);
+    await this.pause(400, 900);
+    // Wait for the confirmation page itself (the current page is already loaded).
+    await Promise.all([this.page.waitForEvent('domcontentloaded'), this.page.click('button[name="ok"]')]);
+    await this.page.locator('table.troop_details .troopHeadline').first().waitFor();
+    await this.pause();
+    const order = await this.page.evaluate(() => ({
+      headline: document.querySelector('table.troop_details .troopHeadline')?.textContent.trim() ?? '',
+      fields: Object.fromEntries([...document.querySelectorAll('form input[type="hidden"]')].map((i) => [i.name, i.value])),
+    }));
+    const f = order.fields;
+    const onlyHero = Array.from({ length: 10 }, (_, i) => f[`troops[0][t${i + 1}]`]).every((v) => v === '0') && f['troops[0][t11]'] === '1';
+    const problems = [
+      !/unoccupied oasis/i.test(order.headline) && `the order reads "${order.headline}"`,
+      f.eventType !== eventType && `event type ${f.eventType}`,
+      (f.x !== String(x) || f.y !== String(y)) && `target (${f.x}|${f.y})`,
+      !onlyHero && 'troops other than the hero',
+      f['troops[0][villageId]'] !== String(did) && `from village ${f['troops[0][villageId]']}`,
+    ].filter(Boolean);
+    if (problems.length) throw new Error(`Refusing to confirm the hero's raid: ${problems.join(', ')}`);
+    if (this.dryRun) {
+      this.log(`[dry run] would confirm "${order.headline}" at (${x}|${y}) with the hero`);
+      await this.goto('/dorf1.php');
+      return;
+    }
+    await Promise.all([this.page.waitForEvent('domcontentloaded'), this.page.click('#confirmSendTroops')]);
+    await this.pause();
+  }
+
   // Sends `troops` from village `did` as reinforcement to (x|y). The confirmation page must say
   // "Reinforcement" before it is confirmed. Returns the arrival time in ms, or null.
   async sendReinforcement(did, { x, y }, troops) {
@@ -713,7 +816,7 @@ export class Travian {
 
   // Map tiles in a 31x31 area centred on (x, y), as the game's map loads them.
   async mapTiles(x, y) {
-    const res = await this.api('/api/v1/map/position', { data: { x, y, zoomLevel: 3, ignorePositions: [] } });
+    const res = await this.api('/api/v1/map/position', { data: { x, y, zoomLevel: 3, ignorePositions: [] } }, 'POST', { read: true });
     return new Map(res.tiles.map((t) => [`${t.position.x}|${t.position.y}`, t]));
   }
 

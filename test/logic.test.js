@@ -4,6 +4,9 @@ import { DEFAULT_CONFIG, configFromEnv, mergeConfig, resolveConfig } from '../sr
 import {
   listUnit, setupFarmLists, slotCapacity, splitByUnit,
 } from '../src/farming.js';
+import {
+  estimateLoss, pickAdventure, pickOasis, sendHero, staysHome, tileAnimals,
+} from '../src/hero.js';
 import { trainAmount } from '../src/military.js';
 import {
   canDevelop, isRaidableOasis, oasisAnimals, reinforceTarget, trainingUnit,
@@ -213,4 +216,65 @@ test('smithy: what to improve, in which order, and when to look again', async ()
   improved.length = 0;
   await improveUnits(game, [villages[1]], c, { force: true });
   assert.deepEqual(improved, [], 'forced, but still no Smithy there');
+});
+
+test('hero: adventures first, else the oasis with the most animals it can safely clear', async () => {
+  const c = resolveConfig({ heroRaid: { radius: 15, maxLoss: 25, minHealth: 50 } });
+  const animal = (id, n) => `<i class="unit u${id}"></i><span class="value ">${n}</span>`;
+  const oasis = (x, y, ...animals) => ({ position: { x, y }, title: '{k.fo}', uid: null, text: animals.join('') });
+  assert.deepEqual(tileAnimals(oasis(0, 0, animal(33, 5), animal(37, 2))), [{ id: 33, name: 'Snake', count: 5 }, { id: 37, name: 'Bear', count: 2 }]);
+
+  const hero = { power: 10_000, mounted: true, health: 100 };
+  // 5 snakes on horseback: 5 x 60 = 300 defence against 10000 -> tiny loss.
+  assert.ok(estimateLoss([{ id: 33, count: 5 }], hero) <= 1);
+  // 20 elephants: 10400 cavalry defence beats the hero.
+  assert.equal(estimateLoss([{ id: 40, count: 20 }], hero), 100);
+  // Infantry defence is used on foot, and an attack costs more than a raid.
+  const bears = [{ id: 37, count: 20 }];
+  assert.ok(estimateLoss(bears, { ...hero, mounted: false }) < estimateLoss(bears, hero));
+  assert.ok(estimateLoss(bears, hero, 'attack') > estimateLoss(bears, hero, 'raid'));
+
+  const tiles = [
+    oasis(3, 0, animal(31, 4)), // 4 rats, near
+    oasis(10, 0, animal(33, 6), animal(34, 3)), // 9 animals
+    oasis(12, 0, animal(40, 30)), // too strong
+    oasis(40, 0, animal(31, 50)), // too far
+    { ...oasis(5, 0, animal(31, 20)), uid: 7 }, // someone's oasis
+  ];
+  const best = pickOasis(tiles, { x: 0, y: 0 }, hero, c);
+  assert.deepEqual([best.x, best.count], [10, 9], 'most animals among those in range and within the loss limit');
+  assert.equal(pickOasis(tiles, { x: 0, y: 0 }, { ...hero, power: 100 }, c)?.x, undefined, 'a weak hero finds nothing it can clear');
+
+  assert.equal(pickAdventure([{ number: 1, difficulty: 1, travelingDuration: 10 }, { number: 2, difficulty: 0, travelingDuration: 500 }, { number: 3, difficulty: 0, travelingDuration: 100 }]).number, 3);
+  assert.match(staysHome({ isAlive: true, home: true, health: 40 }, c), /under 50/);
+  assert.match(staysHome({ isAlive: true, home: false, away: 'in Ellis' }, c), /in Ellis/);
+  assert.equal(staysHome({ isAlive: true, home: true, health: 80 }, c), null);
+
+  const stored = new Map();
+  const calls = [];
+  let adventures = [{ number: 9, x: 1, y: 1, difficulty: 0 }];
+  const game = {
+    log() {},
+    store: { get: async (k) => stored.get(k), set: async (k, v) => stored.set(k, v) },
+    heroStatus: async () => ({
+      isAlive: true, health: 90, home: true, homeVillage: { id: 5, name: 'Home', x: 0, y: 0 }, adventures,
+    }),
+    heroPower: async () => ({ power: 10_000, mounted: true }),
+    startAdventure: async (n) => { calls.push(['adventure', n]); return {}; },
+    sendHeroTo: async (did, o, mode) => { calls.push(['oasis', did, o.x, o.y, mode]); },
+    mapTiles: async () => new Map(tiles.map((t) => [`${t.position.x}|${t.position.y}`, t])),
+    pause: async () => {},
+  };
+  assert.equal((await sendHero(game, c)).action.type, 'adventure');
+  adventures = [];
+  const out = await sendHero(game, c);
+  assert.equal(out.action.type, 'oasis');
+  assert.deepEqual(calls, [['adventure', 9], ['oasis', 5, 10, 0, 'raid']]);
+
+  const weak = { ...game, heroPower: async () => ({ power: 50, mounted: false }) };
+  assert.match((await sendHero(weak, c)).note, /no oasis/);
+  calls.length = 0;
+  assert.match((await sendHero(weak, c)).note, /no oasis/, 'remembered for half an hour');
+  assert.ok(stored.get('hero').quietUntil > Date.now());
+  assert.match((await sendHero(game, resolveConfig({ ...c, features: { heroRaid: true } }), { force: true })).action.type, /oasis/, 'forced runs look again');
 });
