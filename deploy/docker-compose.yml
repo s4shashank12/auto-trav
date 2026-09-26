@@ -48,6 +48,8 @@ services:
       # Chromium only runs during rounds and closes this long after the last one.
       BROWSER_IDLE_SECONDS: ${BROWSER_IDLE_SECONDS:-60}
       LOAD_IMAGES: ${LOAD_IMAGES:-false}
+      # A page load or click may take this long before a round gives up (slow, swapping VMs).
+      PAGE_TIMEOUT_SECONDS: ${PAGE_TIMEOUT_SECONDS:-90}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-5}
       DATA_DIR: /data
     depends_on:

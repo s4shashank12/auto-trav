@@ -102,6 +102,12 @@ Watchtower add about 60 MB more. So:
 Memory limits (`BACKEND_MEM_LIMIT`, `DB_MEM_LIMIT` in `.env`) keep the bot from starving
 other programs on the VM.
 
+If rounds fail with `Timeout … exceeded`, the VM is short of memory and swapping: check
+`free -h` (the "available" column) and `docker stats --no-stream` while a round runs. The bot
+allows each page `PAGE_TIMEOUT_SECONDS` (90) and restarts Chromium after a failed round, but a
+VM with less than about 450 MB available during rounds needs other programs stopped or more
+memory (e2-small).
+
 From Cloud Shell, or anywhere with `gcloud`:
 
 ```bash
