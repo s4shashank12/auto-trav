@@ -1,0 +1,45 @@
+# Optional: deploys the dashboard to Firebase Hosting when it changes on master.
+# Skipped until the repository has:
+#   secret   FIREBASE_SERVICE_ACCOUNT  JSON key of a service account with Firebase Hosting Admin
+#   variable FIREBASE_PROJECT_ID       the Firebase project id
+#   variable API_URL                   the backend URL the dashboard suggests (e.g. https://api.example.com)
+name: Deploy dashboard
+
+on:
+  push:
+    branches: [master]
+    paths: [dashboard/**, .github/workflows/dashboard.yml]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HAS_FIREBASE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' && vars.FIREBASE_PROJECT_ID != '' }}
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - name: Firebase not configured
+        if: env.HAS_FIREBASE != 'true'
+        run: echo "Set FIREBASE_SERVICE_ACCOUNT and FIREBASE_PROJECT_ID to deploy; skipping."
+      - uses: actions/checkout@v4
+        if: env.HAS_FIREBASE == 'true'
+      - uses: actions/setup-node@v4
+        if: env.HAS_FIREBASE == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - if: env.HAS_FIREBASE == 'true'
+        run: npm ci && npm run build
+        env:
+          VITE_API_URL: ${{ vars.API_URL }}
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        if: env.HAS_FIREBASE == 'true'
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          entryPoint: dashboard
+          channelId: live

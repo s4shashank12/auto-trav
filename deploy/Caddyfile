@@ -1,0 +1,7 @@
+# HTTPS in front of the API (the Firebase-hosted dashboard can only call an https:// API).
+# Caddy gets and renews a Let's Encrypt certificate for API_DOMAIN automatically; point the
+# domain's DNS at the VM and open ports 80 and 443. No domain? <vm-ip-with-dashes>.sslip.io works.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy backend:8080
+}

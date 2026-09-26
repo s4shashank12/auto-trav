@@ -1,0 +1,14 @@
+.git
+.github
+.auth
+.env
+bot.config.json
+node_modules
+dashboard
+deploy
+logs
+screenshots
+scripts
+test
+data
+*.md
