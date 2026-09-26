@@ -55,6 +55,10 @@ export const FARM_LIST_SIZE = 100;
 // barracks, Equites Caesaris in the stable. Workshops (rams, catapults) are left alone.
 export const DEFENSIVE_UNITS = { 19: 't2', 20: 't6' };
 
+// Per-village exceptions to DEFENSIVE_UNITS, by village name: Chingdi's barracks trains Imperians.
+export const TRAIN_OVERRIDES = { Chingdi: { 19: 't3' } };
+export const trainingUnit = (village, gid) => TRAIN_OVERRIDES[village.name]?.[gid] ?? DEFENSIVE_UNITS[gid];
+
 // Villages whose net crop drops under CROP_LOW stop training and send defensive troops to the
 // capital as reinforcements until they are back to CROP_TARGET. The capital only takes them while
 // its own net crop stays above CAPITAL_CROP_MIN.
