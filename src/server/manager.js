@@ -15,6 +15,7 @@ export class BotManager {
     this.launching = null;
     this.users = 0;
     this.idleTimer = null;
+    this.discard = false;
   }
 
   async getBrowser() {
@@ -44,9 +45,22 @@ export class BotManager {
     }
   }
 
-  releaseBrowser() {
+  // With `discard` (after a failure) the browser is closed as soon as nobody uses it, instead of
+  // after the idle time, so the next round starts with a fresh one rather than a stuck one.
+  releaseBrowser({ discard = false } = {}) {
     this.users = Math.max(0, this.users - 1);
-    if (this.users > 0 || this.idleTimer) return;
+    if (discard) this.discard = true;
+    if (this.users > 0) return;
+    if (this.discard) {
+      this.discard = false;
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+      const { browser } = this;
+      this.browser = null;
+      browser?.close().catch(() => {});
+      return;
+    }
+    if (this.idleTimer) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null;
       if (this.users > 0 || !this.browser) return;
@@ -63,7 +77,7 @@ export class BotManager {
         repo: this.repo,
         pool: this.pool,
         acquireBrowser: () => this.acquireBrowser(),
-        releaseBrowser: () => this.releaseBrowser(),
+        releaseBrowser: (opts) => this.releaseBrowser(opts),
         dataDir: this.env.dataDir,
       }));
     }

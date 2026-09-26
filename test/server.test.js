@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { makeCipher, safeEqual } from '../src/server/crypto.js';
+import { BotManager } from '../src/server/manager.js';
 import { ValidationError, validateConfig, validateServer } from '../src/server/validate.js';
 
 test('passwords round-trip through encryption and are not stored in clear', () => {
@@ -35,4 +36,25 @@ test('validateServer', () => {
   assert.equal(ok.url, 'https://ts4.x1.international.travian.com');
   assert.throws(() => validateServer({ name: 'A', url: 'x', username: 'u' }, { create: true }), ValidationError);
   assert.deepEqual(validateServer({ password: '' }), {}, 'empty password keeps the old one');
+});
+
+test('a browser released after a failure is closed once nobody uses it', async () => {
+  const manager = new BotManager({ repo: null, pool: null, env: { browserIdleSeconds: 60 } });
+  let closed = 0;
+  const fake = { isConnected: () => true, close: async () => { closed += 1; } };
+  manager.browser = fake;
+  assert.equal(await manager.acquireBrowser(), fake);
+  assert.equal(await manager.acquireBrowser(), fake);
+  manager.releaseBrowser({ discard: true });
+  assert.equal(closed, 0, 'still in use by the other account');
+  manager.releaseBrowser();
+  assert.equal(closed, 1);
+  assert.equal(manager.browser, null, 'the next round launches a fresh one');
+
+  manager.browser = fake;
+  await manager.acquireBrowser();
+  manager.releaseBrowser();
+  assert.equal(closed, 1, 'a normal release waits for the idle time');
+  assert.ok(manager.idleTimer);
+  clearTimeout(manager.idleTimer);
 });

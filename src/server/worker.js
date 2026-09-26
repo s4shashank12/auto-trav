@@ -74,7 +74,7 @@ export class BotWorker {
       try {
         await this.game.start();
       } catch (err) {
-        await this.closeSession({ keepRunner: true });
+        await this.closeSession({ keepRunner: true, discard: true });
         throw err;
       }
       if (this.runner) this.runner.game = this.game;
@@ -87,15 +87,15 @@ export class BotWorker {
   }
 
   // Closes the browser session. Without keepRunner the Runner goes too (after an error, so the
-  // next round starts clean).
-  async closeSession({ keepRunner = false } = {}) {
+  // next round starts clean); `discard` also has the shared browser restarted.
+  async closeSession({ keepRunner = false, discard = false } = {}) {
     const { game } = this;
     this.game = null;
     if (!keepRunner) this.runner = null;
     await game?.close().catch(() => {});
     if (this.holdsBrowser) {
       this.holdsBrowser = false;
-      this.releaseBrowser();
+      this.releaseBrowser({ discard });
     }
   }
 
@@ -162,7 +162,7 @@ export class BotWorker {
         this.log(`Round failed: ${err.message}`, 'error');
         await this.exclusive(async () => {
           await this.screenshot('error');
-          await this.closeSession(); // start clean next time
+          await this.closeSession({ discard: true }); // start clean next time
         });
         minutes = Math.min(30, 2 ** failures);
         await this.setStatus('error', err.message.slice(0, 500), new Date(Date.now() + minutes * 60_000));
@@ -192,7 +192,7 @@ export class BotWorker {
       } catch (err) {
         this.log(`Action ${name} failed: ${err.message}`, 'error');
         await this.screenshot('error');
-        await this.closeSession();
+        await this.closeSession({ discard: true });
         throw err;
       } finally {
         await this.closeSession({ keepRunner: true });

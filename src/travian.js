@@ -37,6 +37,16 @@ export function launchOptions({ headless = true, loadImages = /^(1|true|yes)$/i.
   return { headless, args };
 }
 
+// How long a page load or click may take. The default Playwright 30s is too short on a small VM
+// that is swapping, where a page can take a minute and still load.
+export const pageTimeoutMs = () => Math.max(10, Number(process.env.PAGE_TIMEOUT_SECONDS) || 90) * 1000;
+
+// Resolves to `fallback` if `promise` takes longer than `ms` (for cleanup that must not hang).
+const within = (promise, ms, fallback = undefined) => Promise.race([
+  promise,
+  new Promise((resolve) => { setTimeout(() => resolve(fallback), ms).unref?.(); }),
+]);
+
 // Saved login (cookies) kept in a JSON file; the server keeps it in Postgres instead.
 export const fileSession = (file = '.auth/state.json') => ({
   load: async () => JSON.parse(await fs.readFile(file, 'utf8').catch(() => 'null')),
@@ -74,6 +84,8 @@ export class Travian {
       viewport: { width: 1280, height: 900 },
       locale: 'en-US',
     });
+    this.context.setDefaultTimeout(pageTimeoutMs());
+    this.context.setDefaultNavigationTimeout(pageTimeoutMs());
     this.page = await this.context.newPage();
     if (process.env.DEBUG_API) {
       this.page.on('request', (r) => {
@@ -83,9 +95,13 @@ export class Travian {
   }
 
   async close() {
-    // Keep the cookies the game refreshed during this session for the next one.
-    if (this.context && this.loggedIn) await this.context.storageState().then((st) => this.session.save(st)).catch(() => {});
-    await this.context?.close().catch(() => {});
+    // Keep the cookies the game refreshed during this session for the next one. Both steps are
+    // bounded: a page that stopped responding must not keep the bot from starting over.
+    if (this.context && this.loggedIn) {
+      const state = await within(this.context.storageState().catch(() => null), 15_000, null);
+      if (state) await this.session.save(state).catch(() => {});
+    }
+    await within(this.context?.close().catch(() => {}), 15_000);
     if (!this.sharedBrowser) await this.browser?.close();
   }
 
@@ -113,7 +129,7 @@ export class Travian {
   async screenshot(name) {
     await fs.mkdir(this.screenshotDir, { recursive: true });
     const file = path.join(this.screenshotDir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${name}.png`);
-    await this.page.screenshot({ path: file, fullPage: true });
+    await this.page.screenshot({ path: file, fullPage: true, timeout: 20_000 });
     return file;
   }
 
@@ -648,64 +664,24 @@ export class Travian {
     return data.ownPlayer.farmLists;
   }
 
-  async openFarmLists(did) {
-    await this.switchVillage(did);
-    await this.goto(`/build.php?id=${RALLY_POINT}&gid=16&tt=99`);
-  }
-
-  dialog() {
-    return this.page.locator('.dialog, .dialogWrapper, #dialogContent').filter({ has: this.page.locator('button.save') }).last();
-  }
-
-  async fillTroops(scope, troops) {
-    for (const [unit, amount] of Object.entries(troops)) {
-      await scope.locator(`input[name="${unit}"]`).fill(String(amount));
-    }
-  }
-
-  // Creates a farm list owned by village `did` and returns its id.
+  // Creates a farm list owned by village `did` and returns its id, with the request the game's
+  // "Create farm list" dialog sends. Going through the API skips the farm list page, which with
+  // many lists is too heavy for a small VM to render in time.
   async createFarmList({ did, villageName, name, troops }) {
     if (name.length > 30) throw new Error(`Farm list name "${name}" is longer than the game's 30 characters`);
-    await this.openFarmLists(did);
-    await this.page.locator('button.createFarmList').first().click();
-    const dlg = this.dialog();
-    await dlg.waitFor();
-    await dlg.locator('input[name="listName"]').fill(name);
-    await dlg.locator('select[name="villageId"]').selectOption({ label: villageName });
-    await this.fillTroops(dlg, troops);
-    await this.pause(300, 800);
     if (this.dryRun) {
       this.log(`[dry run] would create farm list "${name}" for ${villageName}`);
-      await dlg.locator('button.cancel').click();
       return null;
     }
-    await dlg.locator('button.save').click();
-    await dlg.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+    const defaultUnits = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`t${i + 1}`, troops[`t${i + 1}`] ?? 0]));
+    const res = await this.api('/api/v1/farm-list', {
+      villageId: Number(did), name, defaultUnits, useShip: false, onlyLosses: false,
+    });
     await this.pause();
-    const list = (await this.farmLists()).find((l) => l.name === name && l.ownerVillage.id === did);
+    const list = (await this.farmLists()).find((l) => (res?.id != null ? l.id === res.id : l.name === name && l.ownerVillage.id === Number(did)));
     if (!list) throw new Error(`Farm list "${name}" was not created for ${villageName}`);
     this.log(`Created farm list "${name}" (${list.id}) for ${villageName}.`);
     return list.id;
-  }
-
-  // Adds (x|y) to farm list `listId` through the "Add target" dialog. The farm list page must be open.
-  async addFarmListTarget(listId, { x, y }, troops) {
-    await this.page.getByText('Add target', { exact: false }).first().click();
-    const dlg = this.dialog();
-    await dlg.waitFor();
-    await dlg.locator('select[name="listId"]').selectOption(String(listId));
-    await dlg.locator('input[name="x"]').fill(String(x));
-    await dlg.locator('input[name="y"]').fill(String(y));
-    await this.pause(1200, 2000); // the dialog looks the target up
-    await this.fillTroops(dlg, troops);
-    if (this.dryRun) {
-      this.log(`[dry run] would add (${x}|${y}) to farm list ${listId}`);
-      await dlg.locator('button.cancel').click();
-      return;
-    }
-    await dlg.locator('button.save').click();
-    await dlg.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await this.pause(500, 1200);
   }
 
   // Starts exactly `slotIds` of farm list `listId`, with the request its Start button sends when
