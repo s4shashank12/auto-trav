@@ -3,8 +3,13 @@ import { formatStatus } from './travian.js';
 
 // Empty building slots the bot may construct on (39 is the rally point, 40 the wall).
 const CONSTRUCTION_SLOTS = Array.from({ length: 20 }, (_, i) => 19 + i);
-// Construction page tab holding each building: 1 infrastructure, 3 resources.
-const CATEGORY = { 5: 3, 6: 3, 7: 3, 8: 3, 9: 3 };
+// Buildings that have a slot of their own.
+const FIXED_SLOT = { 16: 39 };
+// Construction page tab listing each building: 1 infrastructure (the default), 2 military,
+// 3 resources; 0 for the rally point, whose slot offers nothing else.
+const CATEGORY = {
+  5: 3, 6: 3, 7: 3, 8: 3, 9: 3, 13: 2, 14: 2, 16: 0, 19: 2, 20: 2, 21: 2, 22: 2, 29: 2, 30: 2, 46: 2,
+};
 const FIELD_KEYS = ['wood', 'clay', 'iron', 'crop'];
 
 // Balanced growth: the lowest-level field first, breaking ties by the resource we hold least of.
@@ -29,13 +34,16 @@ export function pickBuildings(slots, fields, buildings) {
   const levelOf = (key) => (FIELD_KEYS.includes(key)
     ? Math.max(0, ...fields.filter((f) => f.type === key).map((f) => f.level))
     : Math.max(0, ...slots.filter((s) => s.gid === Number(key)).map((s) => s.level)));
-  const emptySlot = slots.find((s) => s.gid === 0 && CONSTRUCTION_SLOTS.includes(s.id));
+  const emptySlot = (gid) => (FIXED_SLOT[gid]
+    ? slots.find((s) => s.id === FIXED_SLOT[gid] && s.gid === 0)
+    : slots.find((s) => s.gid === 0 && CONSTRUCTION_SLOTS.includes(s.id)));
   const jobs = [];
   buildings.forEach((b, rank) => {
     const slot = slots.find((s) => s.gid === b.gid);
     if (!slot) {
       const ready = Object.entries(b.requires ?? {}).every(([key, level]) => levelOf(key) >= level);
-      if (emptySlot && ready) jobs.push({ kind: 'construct', ...b, rank, slotId: emptySlot.id, progress: 0, canBuild: true });
+      const target = emptySlot(b.gid);
+      if (target && ready) jobs.push({ kind: 'construct', ...b, rank, slotId: target.id, progress: 0, canBuild: true });
     } else if (!slot.maxLevel && !slot.underConstruction && slot.level < b.maxLevel) {
       jobs.push({ kind: 'upgrade', ...b, rank, slotId: slot.id, progress: slot.level / b.maxLevel, canBuild: slot.canBuild });
     }

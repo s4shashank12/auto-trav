@@ -67,6 +67,20 @@ test('pickBuildings constructs missing buildings once prerequisites are met', ()
   assert.ok(!names.includes('construct Brickyard'), 'needs a level 10 clay pit');
 });
 
+test('pickBuildings puts the rally point in slot 39 and waits for prerequisites', () => {
+  const buildings = [
+    { gid: 16, name: 'Rally Point', maxLevel: 5 },
+    { gid: 19, name: 'Barracks', maxLevel: 20, requires: { 15: 3, 16: 1 } },
+  ];
+  const empty = (id) => ({ id, gid: 0, level: 0 });
+  const slots = [{ id: 26, gid: 15, level: 5, canBuild: true }, empty(19), empty(39), empty(40)];
+  const jobs = pickBuildings(slots, [], buildings);
+  assert.deepEqual(jobs.map((j) => [j.name, j.slotId]), [['Rally Point', 39]], 'barracks waits for the rally point');
+  assert.deepEqual(pickBuildings(slots.filter((s) => s.id !== 39), [], buildings), [], 'no slot 39, no rally point');
+  const withRally = [...slots.filter((s) => s.id !== 39), { id: 39, gid: 16, level: 1, canBuild: true }];
+  assert.deepEqual(pickBuildings(withRally, [], buildings).map((j) => [j.kind, j.name, j.slotId]), [['construct', 'Barracks', 19], ['upgrade', 'Rally Point', 39]]);
+});
+
 test('farm list helpers', () => {
   const { units } = cfg.raid;
   assert.equal(listUnit({ name: 'Oases (auto) EC 2', slots: [] }, cfg), 't6');
