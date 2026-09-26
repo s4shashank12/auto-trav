@@ -38,16 +38,16 @@ export const isAutoFarmList = (list) => list.name.startsWith(AUTO_FARM_LIST_PREF
 
 // Units the bot farms with, slowest first: slow infantry takes the nearest oases and fast
 // cavalry the far ones ("rainbow" farming). Praetorians and scouts never farm.
-// Oases are hit every wave, so each raid only needs to carry about ten minutes of an oasis's
-// production and an animal-free oasis has no defence: one unit per raid (`perSlot`) lets the
-// same troops keep far more oases under a raid every ten minutes. `planUnits` is how many units
-// farm-setup budgets per target (they are tied up across the raids in flight to it).
-// `short` names new farm lists, which the game caps at 30 characters.
+// `perSlot` is the troops per raid. Even an oasis without animals has a base defence (combat
+// strength 10), and a raid of one unit loses it a few percent of the time (a Legionnaire about
+// 10%); with 5-10 units the expected loss is close to zero and a raid also beats a few animals
+// that respawned while it was on its way. `planUnits` is how many units farm-setup budgets per
+// target. `short` names new farm lists, which the game caps at 30 characters.
 export const RAID_UNITS = {
-  t1: { name: 'Legionnaires', short: 'Legionnaires', perSlot: 1, planUnits: 10 },
-  t3: { name: 'Imperians', short: 'Imperians', perSlot: 1, planUnits: 10 },
-  t6: { name: 'Equites Caesaris', short: 'EC', perSlot: 1, planUnits: 5 },
-  t5: { name: 'Equites Imperatoris', short: 'EI', perSlot: 1, planUnits: 5 },
+  t1: { name: 'Legionnaires', short: 'Legionnaires', perSlot: 10, planUnits: 10 },
+  t3: { name: 'Imperians', short: 'Imperians', perSlot: 10, planUnits: 10 },
+  t6: { name: 'Equites Caesaris', short: 'EC', perSlot: 5, planUnits: 5 },
+  t5: { name: 'Equites Imperatoris', short: 'EI', perSlot: 5, planUnits: 5 },
 };
 export const FARM_LIST_SIZE = 100;
 

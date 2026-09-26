@@ -75,10 +75,11 @@ radius. Your own farm lists are never touched.
 
 `raid` sends one wave; in `--loop` mode a wave goes out every `RAID_EVERY_MINUTES` (default 10),
 whether or not earlier raids are back. Every wave sends each target again, so each oasis is hit
-every 10 minutes for as long as the troops last. Each raid carries 1 unit: enough for about ten
-minutes of an oasis's production, and an animal-free oasis has no defence. The nearest targets
-go first, because their troops return soonest. So as many oases as the troops can sustain are hit
-every wave, and far ones get what is left. A target isn't raided twice within
+every 10 minutes for as long as the troops last. Each raid sends 10 Legionnaires or Imperians,
+or 5 Equites Caesaris or Equites Imperatoris. Even an empty oasis has a small base defence that
+kills a lone unit now and then, and raids this size also beat a few animals that respawn while
+they are on their way. The nearest targets go first, because their troops return soonest. So as
+many oases as the troops can sustain are hit every wave, and far ones get what is left. A target isn't raided twice within
 `RAID_CYCLE_MINUTES` (default: the wave interval). Troops at home are shared across a village's
 lists. Every target is checked on the map again right before sending, and only oases that are
 still unoccupied and empty go out.
