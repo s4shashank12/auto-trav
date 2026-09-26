@@ -47,7 +47,7 @@ Actions tab, via "Run workflow"). It does four things:
    minor come from `package.json`. The dashboard shows the version in its top bar. If the
    backend's version differs, it is shown next to it, so you can see when the two are out of
    step. `GET /api/health` also returns the version.
-2. **Backend image.** Built and pushed to `ghcr.io/s4shashank12/auto-travian` with the tags
+2. **Backend image.** Built and pushed to `ghcr.io/s4shashank12/auto-trav` with the tags
    `<version>`, `latest` and `sha-<commit>`.
 3. **Dashboard.** Built with the same version, then deployed to Firebase Hosting.
 4. **Cleanup.** Only the 5 newest builds are kept:
@@ -61,7 +61,7 @@ dashboard and checks that the image builds.
 
 - **Image visibility.** The first release creates the package as **private**. You have two
   options:
-  - make it public: github.com → your profile → Packages → auto-travian → Package settings →
+  - make it public: github.com → your profile → Packages → auto-trav → Package settings →
     Change visibility;
   - or give Watchtower a token (see `GHCR_USER`/`GHCR_TOKEN` in `deploy/.env.example`).
 - **Cleanup permission.** The cleanup job deletes images with the workflow's own token. It
@@ -123,8 +123,8 @@ docker compose version          # Docker Compose v2 is included
 ### 3. Get the deploy files and configure them
 
 ```bash
-git clone https://github.com/s4shashank12/auto-travian.git
-cd auto-travian/deploy
+git clone https://github.com/s4shashank12/auto-trav.git
+cd auto-trav/deploy
 cp .env.example .env
 openssl rand -hex 32            # run twice: one value for ADMIN_TOKEN, one for APP_SECRET
 nano .env
@@ -203,12 +203,12 @@ Accounts that were running start again by themselves after a restart or update
 
 ### 5. Day to day
 
-| Task | Command (in `~/auto-travian/deploy`) |
+| Task | Command (in `~/auto-trav/deploy`) |
 | --- | --- |
 | Logs | `docker compose logs -f backend` (the dashboard's Logs tab shows the same per account) |
 | Update now | Watchtower checks GHCR every 5 minutes and restarts the backend on a new image. To force it: `docker compose pull backend && docker compose up -d backend`. |
 | Which version is running | `curl https://<API_DOMAIN>/api/health`, or the version pill in the dashboard |
-| Pin a version | Set `IMAGE=ghcr.io/s4shashank12/auto-travian:0.2.17` in `.env`, then `docker compose up -d`. |
+| Pin a version | Set `IMAGE=ghcr.io/s4shashank12/auto-trav:0.2.17` in `.env`, then `docker compose up -d`. |
 | Restart | `docker compose restart backend` |
 | Stop everything | `docker compose down` (data stays in the volumes) |
 | Back up | `docker compose exec db pg_dump -U travian travian > backup-$(date +%F).sql` |

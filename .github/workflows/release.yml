@@ -1,6 +1,6 @@
 # Runs when a pull request merges to master (and on demand):
 #   1. version    0.2.<run number> (major.minor from package.json), shown in the dashboard and API
-#   2. image      build the backend and push ghcr.io/<owner>/auto-travian:<version>, :latest and
+#   2. image      build the backend and push ghcr.io/<owner>/<repo>:<version>, :latest and
 #                 :sha-<commit>; Watchtower on the VM picks up :latest
 #   3. dashboard  build with the same version and deploy to Firebase Hosting
 #   4. cleanup    keep only the 5 newest images in GHCR and 5 releases on Firebase Hosting

@@ -22,7 +22,7 @@ services:
       retries: 10
 
   backend:
-    image: ${IMAGE:-ghcr.io/s4shashank12/auto-travian:latest}
+    image: ${IMAGE:-ghcr.io/s4shashank12/auto-trav:latest}
     restart: unless-stopped
     environment:
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
