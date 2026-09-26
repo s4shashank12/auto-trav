@@ -1,12 +1,12 @@
 import fs from 'node:fs/promises';
 import {
-  CAPITAL_CROP_MIN, CROP_LOW, CROP_TARGET, DEFENSIVE_UNITS, REINFORCE_TARGET, canDevelop,
+  CAPITAL_CROP_MIN, CROP_LOW, CROP_TARGET, DEFENSIVE_UNITS, REINFORCE_TARGET, canDevelop, trainingUnit,
 } from './rules.js';
 
 const RESOURCES = ['wood', 'clay', 'iron', 'crop'];
 const REINFORCE_STATE = '.auth/reinforcements.json';
 const BUILDING_NAMES = { 19: 'Barracks', 20: 'Stable' };
-const UNIT_NAMES = { t2: 'Praetorians', t6: 'Equites Caesaris' };
+const UNIT_NAMES = { t2: 'Praetorians', t3: 'Imperians', t6: 'Equites Caesaris' };
 
 async function readState() {
   return JSON.parse(await fs.readFile(REINFORCE_STATE, 'utf8').catch(() => '{}'));
@@ -62,21 +62,23 @@ async function relieveCrop(game, village, capital, crop, capitalCrop) {
   return capitalCrop - upkeep;
 }
 
-// Keeps barracks and stables in the big villages training defensive units. Small villages keep
-// their resources for building. Villages low on crop reinforce the capital instead of training.
+// Keeps barracks and stables in the big villages training (defensive units, except where
+// TRAIN_OVERRIDES says otherwise). Small villages keep their resources for building. Villages
+// low on crop reinforce the capital instead of training.
 export async function trainDefense(game, villages, {
   aheadMinutes = 60, targetMinutes = 180, reserve = 5_000,
 } = {}) {
   const capital = villages.find((v) => v.name === REINFORCE_TARGET);
   let capitalCrop = null;
   for (const village of villages.filter((v) => !canDevelop(v))) {
-    for (const [gid, unit] of Object.entries(DEFENSIVE_UNITS).map(([g, u]) => [Number(g), u])) {
+    for (const gid of Object.keys(DEFENSIVE_UNITS).map(Number)) {
+      const unit = trainingUnit(village, gid);
       const info = await game.trainingInfo(village.did, gid, unit);
       if (!info) continue;
       const crop = info.production.crop;
       if (crop < CROP_LOW) {
         if (capital && village.did !== capital.did) {
-          if (capitalCrop == null) capitalCrop = (await game.trainingInfo(capital.did, 19, 't2'))?.production.crop ?? 0;
+          if (capitalCrop == null) capitalCrop = (await game.trainingInfo(capital.did, 19, trainingUnit(capital, 19)))?.production.crop ?? 0;
           capitalCrop = await relieveCrop(game, village, capital, crop, capitalCrop);
         } else {
           game.log(`${village.name}: crop ${crop}/h is too low to train.`);

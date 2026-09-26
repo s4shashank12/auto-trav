@@ -18,8 +18,9 @@ All rules live in [`src/rules.js`](src/rules.js).
   village's own page before every build.
 - **Attacks:** only raids on unoccupied oases that have no animals, and only through farm lists
   named `Oases (auto) …`. Other farm lists and "Start all farm lists" are never used.
-- **Troops:** the big villages' barracks and stables train defensive units only. Villages short
-  on crop send defensive troops to Chingdi as reinforcements.
+- **Troops:** the big villages' barracks and stables train defensive units, except Chingdi's
+  barracks, which trains Imperians. Villages short on crop send defensive troops to Chingdi as
+  reinforcements.
 
 ## Commands
 
@@ -86,8 +87,8 @@ still unoccupied and empty go out.
 
 ### Defensive troops
 
-`train` keeps the barracks (Praetorians) and stables (Equites Caesaris, where researched) of the
-big villages training. It tops a queue up to 3 hours whenever less than 1 hour is left, using only
+`train` keeps the barracks (Praetorians; Imperians in Chingdi) and stables (Equites Caesaris,
+where researched) of the big villages training. It tops a queue up to 3 hours whenever less than 1 hour is left, using only
 resources above 5,000 of each. Small villages keep their resources for building. Training stops
 once a village's net crop would drop under 200/h. At that point the village sends enough
 Praetorians (then Equites Caesaris) to Chingdi as reinforcements to get back to 600/h, so their
