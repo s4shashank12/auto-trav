@@ -9,7 +9,8 @@
 #   secret   FIREBASE_SERVICE_ACCOUNT  JSON key of a service account with the "Firebase Hosting Admin" role
 #   variable FIREBASE_PROJECT_ID       the Firebase project id
 #   variable API_URL                   optional: the backend URL the dashboard suggests
-#   variable FIREBASE_SITE             optional: the Hosting site id if it is not the project id
+#   variable FIREBASE_SITE             optional: the Hosting site to deploy to; defaults to "site" in
+#                                      dashboard/firebase.json, else the project's default site
 name: Release
 
 on:
@@ -81,6 +82,7 @@ jobs:
       # The project id may be saved as a variable or, by mistake, as a secret; both work.
       FIREBASE_PROJECT: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
       HAS_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+      FIREBASE_SITE: ${{ vars.FIREBASE_SITE }}
     defaults:
       run:
         working-directory: dashboard
@@ -103,6 +105,13 @@ jobs:
           [ -n "$FIREBASE_PROJECT" ] || missing="${missing:+$missing and }the variable FIREBASE_PROJECT_ID"
           if [ -z "$missing" ]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
+            # Hosting site: the FIREBASE_SITE variable, else "site" in firebase.json, else the
+            # project's default site. Written into firebase.json so the deploy goes there.
+            site="${FIREBASE_SITE:-$(node -p "require('./firebase.json').hosting.site || ''")}"
+            site="${site:-$FIREBASE_PROJECT}"
+            node -e "const fs = require('fs'); const f = JSON.parse(fs.readFileSync('firebase.json')); f.hosting.site = process.argv[1]; fs.writeFileSync('firebase.json', JSON.stringify(f, null, 2))" "$site"
+            echo "site=$site" >> "$GITHUB_OUTPUT"
+            echo "Deploying the dashboard to https://$site.web.app" >> "$GITHUB_STEP_SUMMARY"
           else
             msg="Dashboard not deployed to Firebase Hosting. Missing: $missing (repository Settings -> Secrets and variables -> Actions)."
             echo "::warning::$msg"
@@ -120,7 +129,7 @@ jobs:
         if: steps.firebase.outputs.deploy == 'true'
         env:
           SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          SITE: ${{ vars.FIREBASE_SITE || env.FIREBASE_PROJECT }}
+          SITE: ${{ steps.firebase.outputs.site }}
         run: node ../scripts/firebase-keep-releases.mjs
 
   cleanup:

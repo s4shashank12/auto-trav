@@ -77,7 +77,7 @@ dashboard and checks that the image builds.
   | Secret | `FIREBASE_SERVICE_ACCOUNT` | JSON key of a service account with the **Firebase Hosting Admin** and **API Keys Viewer** roles. Create it under Google Cloud console → IAM → Service accounts, then Keys → Add key → JSON. |
   | Variable | `FIREBASE_PROJECT_ID` | Your Firebase project id. A repository secret with this name works too. |
   | Variable | `API_URL` | Optional. The backend URL the connect form suggests, e.g. `https://34-12-56-78.sslip.io`. |
-  | Variable | `FIREBASE_SITE` | Optional. The Hosting site id, if it differs from the project id. |
+  | Variable | `FIREBASE_SITE` | Optional. The Hosting site to deploy to. Defaults to `"site"` in `dashboard/firebase.json` (`auto-travian`, i.e. https://auto-travian.web.app). |
 
 ## Running on a GCP VM
 
