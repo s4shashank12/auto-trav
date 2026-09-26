@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createClient, loadConnection, saveConnection } from './api.js';
+import {
+  APP_VERSION, createClient, loadConnection, saveConnection,
+} from './api.js';
 import Connect from './components/Connect.jsx';
 import ServerDetail from './components/ServerDetail.jsx';
 import ServerForm from './components/ServerForm.jsx';
@@ -60,9 +62,10 @@ export default function App() {
           <span>Travian Bot Control</span>
         </a>
         <div className="topbar-right">
-          <span className="muted small" title={client.base}>
-            {hostOf(client.base)}
-            {meta?.version ? ` · ${String(meta.version).slice(0, 7)}` : ''}
+          <span className="muted small" title={`Backend ${client.base}`}>{hostOf(client.base)}</span>
+          <span className="version" title={`Dashboard ${APP_VERSION} · Backend ${meta?.version ?? '…'}`}>
+            v{APP_VERSION}
+            {meta?.version && meta.version !== APP_VERSION ? ` · API v${meta.version}` : ''}
           </span>
           <button type="button" className="btn ghost" onClick={disconnect}>Disconnect</button>
         </div>

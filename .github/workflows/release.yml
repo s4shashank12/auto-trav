@@ -1,0 +1,125 @@
+# Runs when a pull request merges to master (and on demand):
+#   1. version    0.2.<run number> (major.minor from package.json), shown in the dashboard and API
+#   2. image      build the backend and push ghcr.io/<owner>/auto-travian:<version>, :latest and
+#                 :sha-<commit>; Watchtower on the VM picks up :latest
+#   3. dashboard  build with the same version and deploy to Firebase Hosting
+#   4. cleanup    keep only the 5 newest images in GHCR and 5 releases on Firebase Hosting
+#
+# Firebase needs, in Settings -> Secrets and variables -> Actions:
+#   secret   FIREBASE_SERVICE_ACCOUNT  JSON key of a service account with the "Firebase Hosting Admin" role
+#   variable FIREBASE_PROJECT_ID       the Firebase project id
+#   variable API_URL                   optional: the backend URL the dashboard suggests
+#   variable FIREBASE_SITE             optional: the Hosting site id if it is not the project id
+name: Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  KEEP_BUILDS: 5
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          base=$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')")
+          echo "version=${base}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "Version ${base}.${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
+            type=sha,format=short
+          labels: org.opencontainers.image.version=${{ needs.version.outputs.version }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: APP_VERSION=${{ needs.version.outputs.version }}
+          # One manifest per build (no attestation manifests), so each build is exactly one
+          # package version and the cleanup below can count builds.
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  dashboard:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      HAS_FIREBASE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' && vars.FIREBASE_PROJECT_ID != '' }}
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci && npm run build
+        env:
+          VITE_APP_VERSION: ${{ needs.version.outputs.version }}
+          VITE_API_URL: ${{ vars.API_URL }}
+      - name: Firebase not configured
+        if: env.HAS_FIREBASE != 'true'
+        run: echo "::notice::Set the FIREBASE_SERVICE_ACCOUNT secret and FIREBASE_PROJECT_ID variable to deploy the dashboard."
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        if: env.HAS_FIREBASE == 'true'
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          entryPoint: dashboard
+          channelId: live
+      - name: Keep the last ${{ env.KEEP_BUILDS }} Hosting releases
+        if: env.HAS_FIREBASE == 'true'
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          SITE: ${{ vars.FIREBASE_SITE || vars.FIREBASE_PROJECT_ID }}
+        run: node ../scripts/firebase-keep-releases.mjs
+
+  cleanup:
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Keep the last ${{ env.KEEP_BUILDS }} images in GHCR
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}
+          package-type: container
+          min-versions-to-keep: ${{ env.KEEP_BUILDS }}

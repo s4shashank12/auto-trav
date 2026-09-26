@@ -23,6 +23,9 @@ export function saveConnection(connection) {
 
 export const defaultApiUrl = () => import.meta.env.VITE_API_URL ?? '';
 
+// Set at build time by the release workflow (VITE_APP_VERSION); "dev" for local builds.
+export const APP_VERSION = import.meta.env.VITE_APP_VERSION || 'dev';
+
 export class ApiError extends Error {
   constructor(message, status) {
     super(message);

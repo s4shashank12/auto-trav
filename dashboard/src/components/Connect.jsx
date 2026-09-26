@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createClient, defaultApiUrl } from '../api.js';
+import { APP_VERSION, createClient, defaultApiUrl } from '../api.js';
 
 export default function Connect({ onConnect }) {
   const [url, setUrl] = useState(defaultApiUrl());
@@ -41,6 +41,7 @@ export default function Connect({ onConnect }) {
         </label>
         {error && <p className="error">{error}</p>}
         <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Connecting…' : 'Connect'}</button>
+        <p className="muted small center">Dashboard v{APP_VERSION}</p>
       </form>
     </div>
   );
