@@ -493,6 +493,58 @@ export class Travian {
     return true;
   }
 
+  // The account's tribe: 1 Romans, 2 Teutons, 3 Gauls, 6 Egyptians, 7 Huns, 8 Spartans, 9 Vikings.
+  async tribe() {
+    const data = await this.graphql('{ ownPlayer { tribeId } }');
+    return toInt(data?.ownPlayer?.tribeId);
+  }
+
+  // What the Academy of village `did` can still research. Each unit is ready (its requirements
+  // are met; canResearch when the Research button is enabled) or waits for the buildings in
+  // `missing`. Researched units are not listed. `busy` while a research is running. null when
+  // the village has no Academy.
+  async academy(did) {
+    await this.goto(`/build.php?newdid=${did}&gid=22`);
+    const info = await this.page.evaluate(() => ({
+      active: document.querySelector('.villageInput')?.dataset.did ?? null,
+      isAcademy: Boolean(document.querySelector('#build.gid22')),
+      busy: Boolean(document.querySelector('#build table.under_progress')),
+      units: [...document.querySelectorAll('#build .researches .research')].map((r) => {
+        const img = r.querySelector('img.unit');
+        const n = /\bu(\d+)\b/.exec(img?.className ?? '')?.[1];
+        const button = [...r.querySelectorAll('button.green')]
+          .find((b) => !b.disabled && !b.classList.contains('disabled') && !b.classList.contains('purple'));
+        return {
+          unit: n ? `t${n}` : null,
+          name: img?.getAttribute('alt') ?? null,
+          ready: !r.closest('#researchFuture'),
+          canResearch: Boolean(button),
+          missing: [...r.querySelectorAll('.requirements .error')].map((e) => e.textContent.replace(/\s+/g, ' ').trim()),
+        };
+      }),
+    }));
+    if (toInt(info.active) !== did) throw new Error(`Expected village ${did} to be active, got ${info.active}`);
+    if (!info.isAcademy) return null;
+    return { busy: info.busy, units: info.units.filter((u) => u.unit) };
+  }
+
+  // Starts researching `unit` on the Academy page academy() opened. Only the plain green Research
+  // button of that unit is used (never the video or building-upgrade buttons).
+  async research(did, unit) {
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to research: village ${active} is active, expected ${did}`);
+    const n = Number(String(unit).replace(/^t/, ''));
+    const button = this.page.locator(`#build .researches .research:has(img.unit.u${n}) button.green:not(.disabled):not(.purple)`).first();
+    if (!(await button.isVisible().catch(() => false))) return false;
+    if (this.dryRun) {
+      this.log(`[dry run] would research ${unit}`);
+      return true;
+    }
+    await Promise.all([this.page.waitForLoadState('domcontentloaded'), button.click()]);
+    await this.pause();
+    return true;
+  }
+
   // Sends `troops` from village `did` as reinforcement to (x|y). The confirmation page must say
   // "Reinforcement" before it is confirmed. Returns the arrival time in ms, or null.
   async sendReinforcement(did, { x, y }, troops) {

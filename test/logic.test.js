@@ -104,3 +104,20 @@ test('trainAmount respects queue, resources, game max and crop', () => {
   assert.equal(trainAmount({ ...info, production: { crop: 210 } }, opts), 10, 'crop room');
   assert.equal(trainAmount({ ...info, max: 3 }, opts), 3, 'game max');
 });
+
+test('training: per-village buildings, "none", and what to research', async () => {
+  const { trainingBuildings, trainingUnit } = await import('../src/rules.js');
+  const { wantedResearch } = await import('../src/research.js');
+  const c = resolveConfig({
+    train: { overrides: { Big: { 19: 't3', 21: 't7' }, Quiet: { 19: 'none' } } },
+    research: { units: ['t5'], overrides: { Small: ['t4'] } },
+  });
+  const big = { name: 'Big', population: 900 };
+  assert.deepEqual(trainingBuildings(big, c), [19, 20, 21]);
+  assert.equal(trainingUnit(big, 21, c), 't7');
+  assert.equal(trainingUnit({ name: 'Quiet' }, 19, c), null);
+  assert.equal(trainingUnit({ name: 'Quiet' }, 20, c), 't6', 'other buildings keep the default');
+  assert.deepEqual(wantedResearch(big, c).sort(), ['t3', 't5', 't6', 't7']);
+  assert.deepEqual(wantedResearch({ name: 'Small', population: 100 }, c), ['t4'], 'small villages do not train');
+  assert.deepEqual(wantedResearch(big, resolveConfig({ research: { fromTraining: false } })), []);
+});

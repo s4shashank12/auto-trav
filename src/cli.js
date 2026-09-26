@@ -21,7 +21,8 @@ Commands:
   world              Import today's world data (map.sql); update inactive lists if enabled
   inactives          List inactive players' villages near yours (needs a few days of world data)
   inactive-raid      Raid the inactive farm lists now
-  train              Keep barracks/stables in big villages training
+  train              Research missing units, then keep barracks/stables in big villages training
+  research           Research the units villages need in their Academy
   play               build + train + raid
   --loop             Repeat play (or another command) until stopped
   screenshot [path]  Save a screenshot of a game page (default /dorf1.php)
@@ -31,7 +32,7 @@ bot.config.json (overrides of src/config.js) plus HEADLESS=false, DRY_RUN=true, 
 RAID_RADIUS, RAID_EVERY_MINUTES, RAID_CYCLE_MINUTES, TRAIN_EVERY_MINUTES, LOOP_MIN_MINUTES,
 LOOP_MAX_MINUTES, LOOP_FLOOR_MINUTES.`;
 
-const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'play', 'screenshot', 'world', 'inactives', 'inactive-raid'];
+const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'research', 'play', 'screenshot', 'world', 'inactives', 'inactive-raid'];
 const env = process.env;
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const LOCK_FILE = '.auth/bot.lock';
