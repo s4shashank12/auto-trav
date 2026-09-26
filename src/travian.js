@@ -544,6 +544,17 @@ export class Travian {
     return { busy: info.busy, units: info.units.filter((u) => u.unit) };
   }
 
+  // The link a green Academy or Smithy button opens (its onclick sets window.location), accepted
+  // only when it is a build.php `action` for `unit`.
+  linkFrom(onclick, action, unit) {
+    const href = /location\.href\s*=\s*'([^']+)'/.exec(onclick ?? '')?.[1]?.replace(/&amp;/g, '&');
+    if (!href) return null;
+    const url = new URL(href, this.server);
+    if (url.origin !== new URL(this.server).origin || url.pathname !== '/build.php') return null;
+    if (url.searchParams.get('action') !== action || url.searchParams.get('t') !== unit) return null;
+    return `${url.pathname}${url.search}`;
+  }
+
   // Starts researching `unit` on the Academy page academy() opened. Only the plain green Research
   // button of that unit is used (never the video or building-upgrade buttons).
   async research(did, unit) {
@@ -559,6 +570,67 @@ export class Travian {
     await Promise.all([this.page.waitForLoadState('domcontentloaded'), button.click()]);
     await this.pause();
     return true;
+  }
+
+  // Village `did`'s Smithy: its level, whether an upgrade is running, and each unit it can
+  // improve with the unit's level and the link of its plain green Improve button (null when the
+  // unit cannot be improved right now). Returns null if the village has no Smithy.
+  async smithy(did) {
+    await this.goto(`/build.php?newdid=${did}&gid=13`);
+    const info = await this.page.evaluate(() => {
+      const build = document.querySelector('#build.gid13');
+      return {
+        active: document.querySelector('.villageInput')?.dataset.did ?? null,
+        level: build ? Number(/\blevel(\d+)\b/.exec(build.className)?.[1] ?? 0) : null,
+        running: [...document.querySelectorAll('#build table.under_progress tbody tr')]
+          .map((tr) => tr.innerText.replace(/\s+/g, ' ').trim()).filter(Boolean),
+        runningSeconds: Number(document.querySelector('#build table.under_progress .timer')?.getAttribute('value') ?? NaN),
+        units: [...document.querySelectorAll('#build .researches .research')].map((r) => {
+          const img = r.querySelector('img.unit');
+          const button = [...r.querySelectorAll('button.green')]
+            .find((b) => !b.disabled && !b.classList.contains('disabled') && !b.classList.contains('purple') && !b.classList.contains('gold'));
+          return {
+            n: /\bu(\d+)\b/.exec(img?.className ?? '')?.[1] ?? null,
+            name: img?.getAttribute('alt') ?? null,
+            level: Number(/(\d+)/.exec(r.querySelector('.title .level')?.textContent ?? '')?.[1] ?? NaN),
+            onclick: button?.getAttribute('onclick') ?? null,
+            note: r.querySelector('.errorMessage, .upgradeBlocked, .none, .contractText')?.textContent.replace(/\s+/g, ' ').trim() ?? null,
+          };
+        }),
+      };
+    });
+    if (toInt(info.active) !== did) throw new Error(`Expected village ${did} to be active, got ${info.active}`);
+    if (info.level == null) return null;
+    const seconds = (n) => (Number.isFinite(n) ? n : null);
+    const units = info.units.filter((u) => u.n && Number.isFinite(u.level)).map((u) => ({
+      unit: `t${u.n}`,
+      name: u.name,
+      level: u.level,
+      note: u.note,
+      link: this.linkFrom(u.onclick, 'research', `t${u.n}`),
+    }));
+    return {
+      level: info.level, busy: info.running.length > 0, running: info.running, runningSeconds: seconds(info.runningSeconds), units,
+    };
+  }
+
+  // Improves `unit` in the Smithy smithy() opened, by opening its Improve link (the request the
+  // button sends) and waiting for the page. Returns true once the Smithy shows the upgrade
+  // running, or at least no longer offers to start it.
+  async improve(did, unit, link) {
+    const active = toInt(await this.page.locator('.villageInput').first().getAttribute('data-did').catch(() => null));
+    if (active !== did) throw new Error(`Refusing to improve: village ${active} is active, expected ${did}`);
+    const checked = this.linkFrom(`location.href = '${link}'`, 'research', unit);
+    if (!checked || new URL(checked, this.server).searchParams.get('gid') !== '13') throw new Error(`Not a Smithy link for ${unit}: ${link}`);
+    if (this.dryRun) {
+      this.log(`[dry run] would improve ${unit} in the Smithy`);
+      return true;
+    }
+    await this.goto(checked);
+    if ((await this.page.locator('#build.gid13 table.under_progress').count()) > 0) return true;
+    const n = unit.replace(/^t/, '');
+    const offered = this.page.locator(`#build.gid13 .researches .research:has(img.unit.u${n}) button.green:not(.disabled):not(.purple):not(.gold)`);
+    return (await this.page.locator('#build.gid13').count()) > 0 && (await offered.count()) === 0;
   }
 
   // Sends `troops` from village `did` as reinforcement to (x|y). The confirmation page must say

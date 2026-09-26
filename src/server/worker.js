@@ -4,7 +4,7 @@ import { Runner } from '../runner.js';
 import { CaptchaError, Travian } from '../travian.js';
 import { pgSession, pgStore, pgWorld } from './repo.js';
 
-export const ACTIONS = ['villages', 'build', 'train', 'research', 'raid', 'farm-setup', 'farm-rebuild', 'world', 'inactive-raid'];
+export const ACTIONS = ['villages', 'build', 'train', 'research', 'smithy', 'raid', 'farm-setup', 'farm-rebuild', 'world', 'inactive-raid'];
 
 // Plays one Travian account (a "server" row): rounds on a timer while running, plus one-off
 // actions from the dashboard. Everything that touches the game goes through exclusive(), so a

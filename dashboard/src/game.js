@@ -62,6 +62,9 @@ export function unitsFor(tribe, gid) {
 // Units that can be researched in the Academy (the first unit and settlers never need it).
 export const researchable = (tribe) => tribeUnits(tribe).filter((u) => /^t[2-9]$/.test(u.code));
 
+// Units the Smithy can improve: everything but chiefs and settlers.
+export const improvable = (tribe) => tribeUnits(tribe).filter((u) => /^t[1-8]$/.test(u.code));
+
 // Buildings a village can develop, with their in-game maximum level and prerequisites
 // (building id -> level, or a resource field type -> level).
 export const BUILDINGS = [

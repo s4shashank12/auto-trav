@@ -3,9 +3,10 @@ import {
 } from '@dnd-kit/core';
 import { useMemo, useState } from 'react';
 import {
-  TRAINING_BUILDINGS, researchable, tribeUnits, TRIBES, unitName, unitsFor,
+  improvable, TRAINING_BUILDINGS, researchable, tribeUnits, TRIBES, unitName, unitsFor,
 } from '../game.js';
-import { Icon, useDragSensors } from './ui.jsx';
+import { timeUntil } from '../util.js';
+import { Icon, Stepper, useDragSensors } from './ui.jsx';
 
 const DEFAULT_ROW = '*';
 const NONE = 'none';
@@ -54,6 +55,71 @@ function Drop({
 
 const withoutKey = (obj, key) => Object.fromEntries(Object.entries(obj ?? {}).filter(([k]) => k !== String(key)));
 
+// Which units a list takes, and which trained units it adds on its own (fromTraining).
+const SECTIONS = {
+  research: { accepts: researchable, implied: /^t[2-9]$/ },
+  smithy: { accepts: improvable, implied: /^t[1-8]$/ },
+};
+
+// A unit list per village ("Every village" on top, which the others use unless they have their
+// own), for Academy research or Smithy upgrades.
+function ListsCard({
+  section, title, icon, help, switchLabel, extra, lists, rows, tribe, armed, tap, trainsNow, onSet, onRemove, status,
+}) {
+  const { fromTraining, units, overrides } = lists;
+  const listFor = (row) => (row === DEFAULT_ROW ? units : overrides[row] ?? units);
+  const accepts = (unit) => SECTIONS[section].accepts(tribe).some((u) => u.code === unit);
+  return (
+    <section className="card">
+      <div className="card-head">
+        <div>
+          <h3><Icon name={icon} /> {title}</h3>
+          <p className="muted small">{help}</p>
+        </div>
+        <div className="list-card-controls">
+          {extra}
+          <label className="switch">
+            <input type="checkbox" checked={Boolean(fromTraining)} onChange={(e) => onSet('fromTraining', e.target.checked)} />
+            <span>{switchLabel}</span>
+          </label>
+        </div>
+      </div>
+      <div className="research-list">
+        {rows.map((row) => {
+          const own = row.isDefault || overrides[row.key] !== undefined;
+          const list = listFor(row.key);
+          const implied = row.village && fromTraining ? trainsNow(row.village).filter((u) => !list.includes(u) && SECTIONS[section].implied.test(u)) : [];
+          const target = { kind: 'list', section, row: row.key };
+          return (
+            <div key={row.key} className={`research-row ${row.isDefault ? 'is-default' : ''}`}>
+              <div className="board-name">
+                <strong>{row.name}</strong>
+                {row.isDefault && <span className="tag">default</span>}
+                {!row.isDefault && own && (
+                  <button type="button" className="link small" onClick={() => onSet('overrides', withoutKey(overrides, row.key))}>use default</button>
+                )}
+              </div>
+              <Drop id={`${section}|${row.key}`} data={target} accepts={accepts} onTap={armed ? tap(target) : undefined} className="research-drop" label={`${title} list for ${row.name}`}>
+                {list.map((u) => (
+                  <span key={u} className={`unit-chip static ${own ? '' : 'inherited'}`}>
+                    {unitName(tribe, u)}
+                    <button type="button" className="icon-btn" aria-label={`Remove ${unitName(tribe, u)}`} onClick={(e) => { e.stopPropagation(); onRemove(row.key, u); }}>
+                      <Icon name="x" size={12} />
+                    </button>
+                  </span>
+                ))}
+                {implied.map((u) => <span key={u} className="unit-chip static implied" title="Included because this village trains it">{unitName(tribe, u)}</span>)}
+                {!list.length && !implied.length && <span className="muted small">Drop units here</span>}
+              </Drop>
+              {row.village && status(row.key)}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 // Training and research, both as "default for every village" plus per-village overrides, edited
 // by dragging units (or tapping a unit, then a slot).
 export default function Army({ draft, server }) {
@@ -68,11 +134,12 @@ export default function Army({ draft, server }) {
 
   const trainUnits = draft.value('train.units') ?? {};
   const trainOverrides = draft.value('train.overrides') ?? {};
-  const research = {
-    fromTraining: draft.value('research.fromTraining'),
-    units: draft.value('research.units') ?? [],
-    overrides: draft.value('research.overrides') ?? {},
-  };
+  const listsOf = (section) => ({
+    fromTraining: draft.value(`${section}.fromTraining`),
+    units: draft.value(`${section}.units`) ?? [],
+    overrides: draft.value(`${section}.overrides`) ?? {},
+  });
+  const lists = { research: listsOf('research'), smithy: listsOf('smithy') };
   const limit = draft.value('build.populationLimit');
 
   // Buildings shown as columns: the three troop buildings, plus any other the settings use.
@@ -83,7 +150,6 @@ export default function Army({ draft, server }) {
   }, [trainUnits, trainOverrides]);
 
   const canTrainIn = (gid) => (unit) => unit === NONE || !known || unitsFor(tribe, gid).some((u) => u.code === unit);
-  const canResearch = (unit) => researchable(tribe).some((u) => u.code === unit);
 
   function setTraining(row, gid, unit) {
     const key = String(gid);
@@ -97,27 +163,24 @@ export default function Army({ draft, server }) {
     draft.change('train.overrides', next);
   }
 
-  function setResearch(row, list) {
+  // A research or Smithy list: the default one, or a village's own.
+  function setList(section, row, list) {
     if (row === DEFAULT_ROW) {
-      draft.change('research.units', list);
+      draft.change(`${section}.units`, list);
       return;
     }
-    const next = { ...research.overrides };
-    if (list == null) delete next[row];
-    else next[row] = list;
-    draft.change('research.overrides', next);
+    draft.change(`${section}.overrides`, { ...lists[section].overrides, [row]: list });
   }
-
-  const researchList = (row) => (row === DEFAULT_ROW ? research.units : research.overrides[row] ?? research.units);
-  const addResearch = (row, unit) => {
-    if (!canResearch(unit)) return;
-    setResearch(row, [...new Set([...researchList(row), unit])]);
+  const listFor = (section, row) => (row === DEFAULT_ROW ? lists[section].units : lists[section].overrides[row] ?? lists[section].units);
+  const addTo = (section, row, unit) => {
+    if (!SECTIONS[section].accepts(tribe).some((u) => u.code === unit)) return;
+    setList(section, row, [...new Set([...listFor(section, row), unit])]);
   };
-  const removeResearch = (row, unit) => setResearch(row, researchList(row).filter((u) => u !== unit));
+  const removeFrom = (section) => (row, unit) => setList(section, row, listFor(section, row).filter((u) => u !== unit));
 
   function place(target, unit) {
     if (target.kind === 'train' && canTrainIn(target.gid)(unit)) setTraining(target.row, target.gid, unit);
-    if (target.kind === 'research' && unit !== NONE) addResearch(target.row, unit);
+    if (target.kind === 'list' && unit !== NONE) addTo(target.section, target.row, unit);
   }
   const tap = (target) => () => {
     if (!armed) return;
@@ -136,13 +199,14 @@ export default function Army({ draft, server }) {
     return columns.map(({ gid }) => trainOverrides[v.name]?.[gid] ?? trainUnits[gid]).filter((u) => u && u !== NONE);
   };
   const researchStatus = new Map((snapshot.research ?? []).map((r) => [r.village, r]));
+  const smithyStatus = new Map((snapshot.smithy ?? []).map((r) => [r.village, r]));
   const rows = [{ key: DEFAULT_ROW, name: 'Every village', isDefault: true }, ...villages.map((v) => ({ key: v.name, name: v.name, village: v }))];
 
   const palette = (
     <div className="palette">
       <div className="palette-head">
         <h3>Units{tribe ? ` · ${TRIBES[tribe] ?? ''}` : ''}</h3>
-        <p className="muted small">Drag a unit onto a building or research list, or tap it and then tap where it goes.</p>
+        <p className="muted small">Drag a unit onto a building, research or Smithy list, or tap it and then tap where it goes.</p>
         {!known && <p className="notice small">Unit names appear after the bot's next round (it reads your tribe then).</p>}
       </div>
       {[...columns.map((c) => ({ title: c.name, list: unitsFor(tribe, c.gid) })), { title: 'Leaders', list: units.filter((u) => u.gid === 25 && u.code !== 't10') }]
@@ -235,57 +299,69 @@ export default function Army({ draft, server }) {
             </div>
           </section>
 
-          <section className="card">
-            <div className="card-head">
-              <div>
-                <h3><Icon name="book" /> Research</h3>
-                <p className="muted small">The Academy researches these, one at a time, before training. Villages use the top list unless they have their own.</p>
-              </div>
-              <label className="switch">
-                <input type="checkbox" checked={Boolean(research.fromTraining)} onChange={(e) => draft.change('research.fromTraining', e.target.checked)} />
-                <span>Also research what a village trains</span>
+          <ListsCard
+            section="research"
+            title="Research"
+            icon="book"
+            help="The Academy researches these, one at a time, before training. Villages use the top list unless they have their own."
+            switchLabel="Also research what a village trains"
+            lists={lists.research}
+            rows={rows}
+            tribe={tribe}
+            armed={armed}
+            tap={tap}
+            trainsNow={trainsNow}
+            onSet={(key, value) => draft.change(`research.${key}`, value)}
+            onRemove={removeFrom('research')}
+            status={(name) => {
+              const st = researchStatus.get(name);
+              return st && (
+                <div className="research-status small">
+                  {st.started && <span className="st st-good"><Icon name="book" size={12} /> Researching {st.started}</span>}
+                  {st.researched?.map((u) => <span key={u} className="st st-muted"><Icon name="check" size={12} /> {unitName(tribe, u)}</span>)}
+                  {st.waiting?.map((w) => <span key={w.unit} className="st st-warn"><Icon name="pause" size={12} /> {w.name ?? unitName(tribe, w.unit)}: {w.reason}</span>)}
+                </div>
+              );
+            }}
+          />
+
+          <ListsCard
+            section="smithy"
+            title="Smithy"
+            icon="hammer"
+            help="The Smithy improves these, one upgrade at a time, lowest level first, after research and before training. Villages use the top list unless they have their own."
+            switchLabel="Also improve what a village trains"
+            extra={(
+              <label className="row small">
+                <span className="muted">Up to level</span>
+                <Stepper value={draft.value('smithy.maxLevel') ?? 20} min={1} max={20} onChange={(v) => draft.change('smithy.maxLevel', v)} label="Smithy upgrades up to level" />
               </label>
-            </div>
-            <div className="research-list">
-              {rows.map((row) => {
-                const own = row.isDefault || research.overrides[row.key] !== undefined;
-                const list = researchList(row.key);
-                const implied = row.village && research.fromTraining ? trainsNow(row.village).filter((u) => !list.includes(u) && /^t[2-9]$/.test(u)) : [];
-                const status = row.village && researchStatus.get(row.key);
-                const target = { kind: 'research', row: row.key };
-                return (
-                  <div key={row.key} className={`research-row ${row.isDefault ? 'is-default' : ''}`}>
-                    <div className="board-name">
-                      <strong>{row.name}</strong>
-                      {row.isDefault && <span className="tag">default</span>}
-                      {!row.isDefault && own && (
-                        <button type="button" className="link small" onClick={() => setResearch(row.key, undefined)}>use default</button>
-                      )}
-                    </div>
-                    <Drop id={`research|${row.key}`} data={target} accepts={canResearch} onTap={armed ? tap(target) : undefined} className="research-drop" label={`Research list for ${row.name}`}>
-                      {list.map((u) => (
-                        <span key={u} className={`unit-chip static ${own ? '' : 'inherited'}`}>
-                          {unitName(tribe, u)}
-                          <button type="button" className="icon-btn" aria-label={`Remove ${unitName(tribe, u)}`} onClick={(e) => { e.stopPropagation(); removeResearch(row.key, u); }}>
-                            <Icon name="x" size={12} />
-                          </button>
-                        </span>
-                      ))}
-                      {implied.map((u) => <span key={u} className="unit-chip static implied" title="Researched because this village trains it">{unitName(tribe, u)}</span>)}
-                      {!list.length && !implied.length && <span className="muted small">Drop units here</span>}
-                    </Drop>
-                    {status && (
-                      <div className="research-status small">
-                        {status.started && <span className="st st-good"><Icon name="book" size={12} /> Researching {status.started}</span>}
-                        {status.researched?.map((u) => <span key={u} className="st st-muted"><Icon name="check" size={12} /> {unitName(tribe, u)}</span>)}
-                        {status.waiting?.map((w) => <span key={w.unit} className="st st-warn"><Icon name="pause" size={12} /> {w.name ?? unitName(tribe, w.unit)}: {w.reason}</span>)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+            )}
+            lists={lists.smithy}
+            rows={rows}
+            tribe={tribe}
+            armed={armed}
+            tap={tap}
+            trainsNow={trainsNow}
+            onSet={(key, value) => draft.change(`smithy.${key}`, value)}
+            onRemove={removeFrom('smithy')}
+            status={(name) => {
+              const st = smithyStatus.get(name);
+              if (!st) return null;
+              return (
+                <div className="research-status small">
+                  {st.note && <span className="st st-muted"><Icon name="pause" size={12} /> {st.note}</span>}
+                  {st.started && <span className="st st-good"><Icon name="hammer" size={12} /> Improving {st.started}</span>}
+                  {!st.started && st.running && <span className="st st-good"><Icon name="hammer" size={12} /> {st.running}</span>}
+                  {Object.entries(st.levels ?? {}).map(([u, lvl]) => (
+                    <span key={u} className="st st-muted">{lvl >= st.cap ? <Icon name="check" size={12} /> : null} {unitName(tribe, u)} {lvl}/{st.cap}</span>
+                  ))}
+                  {st.waiting?.filter((w) => w.reason !== 'after the current upgrade').map((w) => <span key={w.unit} className="st st-warn"><Icon name="pause" size={12} /> {w.name ?? unitName(tribe, w.unit)}: {w.reason}</span>)}
+                  {st.nextCheckAt && !st.started && <span className="muted">next look {timeUntil(st.nextCheckAt)}</span>}
+                </div>
+              );
+            }}
+          />
         </div>
       </div>
       <DragOverlay dropAnimation={null}>

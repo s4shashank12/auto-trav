@@ -4,6 +4,7 @@ import {
 } from './inactive.js';
 import { trainTroops } from './military.js';
 import { researchUnits } from './research.js';
+import { improveUnits } from './smithy.js';
 import { canDevelop, isAutoFarmList } from './rules.js';
 import { developVillage } from './strategy.js';
 import { findInactives } from './world.js';
@@ -51,7 +52,15 @@ export class Runner {
     this.lastTrain = Date.now();
     // Research first: a unit has to be researched before it can be trained.
     if (this.cfg.features.research) await this.research(villages);
+    // Then Smithy upgrades, so they are paid for before training uses the resources.
+    if (this.cfg.features.smithy) await this.smithy(villages);
     this.snapshot.training = await trainTroops(this.game, villages, this.cfg);
+  }
+
+  // With `force` every Smithy is looked at now (the dashboard's button), not only the due ones.
+  async smithy(villages, { force = false } = {}) {
+    this.snapshot.smithy = await improveUnits(this.game, villages, this.cfg, { force });
+    this.snapshot.smithyAt = new Date().toISOString();
   }
 
   async research(villages) {
@@ -125,6 +134,7 @@ export class Runner {
     if (name === 'build') await this.build(villages);
     else if (name === 'train') await this.train(villages);
     else if (name === 'research') await this.research(villages);
+    else if (name === 'smithy') await this.smithy(villages, { force: true });
     else if (name === 'raid') await this.raid(villages);
     else if (name === 'farm-setup') result = await this.farmSetup(villages);
     else if (name === 'farm-rebuild') result = await this.farmSetup(villages, { rebuild: true });
