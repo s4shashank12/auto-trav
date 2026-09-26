@@ -87,12 +87,33 @@ export function splitByUnit(oases, cap, units) {
 // Fills the bot's farm lists with every empty, unoccupied oasis within `radius` fields of the
 // village raiding it, up to `listSize` slots per list, one list set per unit type. Each oasis
 // goes to one list only, bot slots farther than `radius` are removed, and every bot slot is set to
-// its unit's per-raid amount. Safe to re-run.
-export async function setupFarmLists(game, villages, cfg) {
+// its unit's per-raid amount. Safe to re-run. With `rebuild`, every target is first removed from
+// the bot's lists (only those), so they are refilled from scratch with the current troop order.
+export async function setupFarmLists(game, villages, cfg, { rebuild = false } = {}) {
   const { radius, listSize, listPrefix, units } = cfg.raid;
   const unitInfo = (u) => units.find((x) => x.unit === u);
   const botLists = async () => (await game.farmLists()).filter((l) => isAutoFarmList(l, cfg));
   let lists = await botLists();
+  let cleared = 0;
+  // Raids still out from removed targets, per village and unit: their troops come back and count
+  // towards how many targets the village can take on.
+  const away = new Map();
+  if (rebuild) {
+    const before = lists;
+    const all = before.flatMap((l) => l.slots.map((s) => s.id));
+    game.log(`Rebuilding: removing all ${all.length} targets from ${before.length} "${listPrefix}" farm lists.`);
+    for (let i = 0; i < all.length; i += 50) await game.deleteFarmListSlots(all.slice(i, i + 50));
+    lists = await botLists();
+    const left = new Set(lists.flatMap((l) => l.slots.map((s) => s.id)));
+    cleared = all.filter((id) => !left.has(id)).length;
+    for (const l of before) {
+      const out = away.get(l.ownerVillage.id) ?? {};
+      for (const s of l.slots.filter((x) => x.isRunning && !left.has(x.id))) {
+        for (const { unit } of units) if ((s.troop[unit] ?? 0) > 0) out[unit] = (out[unit] ?? 0) + 1;
+      }
+      away.set(l.ownerVillage.id, out);
+    }
+  }
   const byId = new Map(villages.map((v) => [v.did, v]));
   const tooFar = lists.flatMap((l) => {
     const owner = byId.get(l.ownerVillage.id);
@@ -117,7 +138,11 @@ export async function setupFarmLists(game, villages, cfg) {
   const known = new Set(lists.flatMap((l) => l.slots.map((s) => key(s.target.x, s.target.y))));
 
   const raiders = villages
-    .map((v) => ({ ...v, cap: slotCapacity(troops.get(v.did) ?? {}, lists.filter((l) => l.ownerVillage.id === v.did), units) }))
+    .map((v) => {
+      const cap = slotCapacity(troops.get(v.did) ?? {}, lists.filter((l) => l.ownerVillage.id === v.did), units);
+      for (const [unit, n] of Object.entries(away.get(v.did) ?? {})) cap[unit] += n;
+      return { ...v, cap };
+    })
     .filter((v) => Object.values(v.cap).some((n) => n > 0));
   for (const v of raiders) {
     game.log(`${v.name}: room for ${Object.entries(v.cap).filter(([, n]) => n).map(([u, n]) => `${n} ${unitInfo(u).name}`).join(', ')} targets.`);
@@ -178,7 +203,9 @@ export async function setupFarmLists(game, villages, cfg) {
       }
     }
   }
-  return { removed: tooFar.length, resized: resize.length, added };
+  return {
+    cleared, removed: tooFar.length, resized: resize.length, added,
+  };
 }
 
 function unsafeReason(tile) {

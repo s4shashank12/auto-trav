@@ -17,6 +17,7 @@ Commands:
   villages           List villages, population and whether the bot may build there
   build              Develop the villages under the population limit
   farm-setup         Fill the bot's farm lists with empty, unoccupied oases
+  farm-rebuild       Empty the bot's farm lists, then fill them again (farm-setup from scratch)
   raid               Send one raid wave from the bot's farm lists
   world              Import today's world data (map.sql); update inactive lists if enabled
   inactives          List inactive players' villages near yours (needs a few days of world data)
@@ -32,7 +33,7 @@ bot.config.json (overrides of src/config.js) plus HEADLESS=false, DRY_RUN=true, 
 RAID_RADIUS, RAID_EVERY_MINUTES, RAID_CYCLE_MINUTES, TRAIN_EVERY_MINUTES, LOOP_MIN_MINUTES,
 LOOP_MAX_MINUTES, LOOP_FLOOR_MINUTES.`;
 
-const COMMANDS = ['villages', 'build', 'farm-setup', 'raid', 'train', 'research', 'play', 'screenshot', 'world', 'inactives', 'inactive-raid'];
+const COMMANDS = ['villages', 'build', 'farm-setup', 'farm-rebuild', 'raid', 'train', 'research', 'play', 'screenshot', 'world', 'inactives', 'inactive-raid'];
 const env = process.env;
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 const LOCK_FILE = '.auth/bot.lock';

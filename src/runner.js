@@ -4,7 +4,7 @@ import {
 } from './inactive.js';
 import { trainTroops } from './military.js';
 import { researchUnits } from './research.js';
-import { canDevelop } from './rules.js';
+import { canDevelop, isAutoFarmList } from './rules.js';
 import { developVillage } from './strategy.js';
 import { findInactives } from './world.js';
 
@@ -65,8 +65,16 @@ export class Runner {
     this.snapshot.lastWaveAt = new Date(this.lastRaid).toISOString();
   }
 
-  async farmSetup(villages) {
-    return setupFarmLists(this.game, villages, this.cfg);
+  async farmSetup(villages, { rebuild = false } = {}) {
+    const result = await setupFarmLists(this.game, villages, this.cfg, { rebuild });
+    const lists = (await this.game.farmLists()).filter((l) => isAutoFarmList(l, this.cfg));
+    this.snapshot.farmSetup = {
+      ...result,
+      rebuild,
+      at: new Date().toISOString(),
+      lists: lists.map((l) => ({ village: l.ownerVillage.name, list: l.name, targets: l.slots.length })),
+    };
+    return result;
   }
 
   // Imports today's world data (once a day unless forced) and, when inactive raiding is on,
@@ -119,6 +127,7 @@ export class Runner {
     else if (name === 'research') await this.research(villages);
     else if (name === 'raid') await this.raid(villages);
     else if (name === 'farm-setup') result = await this.farmSetup(villages);
+    else if (name === 'farm-rebuild') result = await this.farmSetup(villages, { rebuild: true });
     else if (name === 'world') result = await this.updateWorld(villages, { force: true });
     else if (name === 'inactive-raid') await this.raidInactives(villages);
     else if (name !== 'villages') throw new Error(`Unknown action "${name}"`);

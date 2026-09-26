@@ -34,6 +34,7 @@ const ACTIONS = {
   research: ['Research now', 'Start missing Academy research'],
   raid: ['Send a raid wave', 'From the oasis farm lists'],
   'farm-setup': ['Set up farm lists', 'Find and add empty oases'],
+  'farm-rebuild': ['Rebuild farm lists', 'Empty the bot\'s lists and fill them again'],
   world: ['Import world data', 'For inactive player detection'],
   'inactive-raid': ['Raid inactive players', 'From the inactive farm lists'],
 };
@@ -75,7 +76,8 @@ export default function ServerDetail({
   if (error && !server) return <p className="error">{error.message}</p>;
   if (!server || !meta) return <p className="muted">Loading…</p>;
 
-  const actions = (meta.actions ?? Object.keys(ACTIONS)).map((a) => ({
+  // Rebuilding farm lists empties them first, so it lives on the Raiding tab behind a confirm.
+  const actions = (meta.actions ?? Object.keys(ACTIONS)).filter((a) => a !== 'farm-rebuild').map((a) => ({
     key: a,
     label: ACTIONS[a]?.[0] ?? a,
     hint: ACTIONS[a]?.[1],
@@ -116,7 +118,13 @@ export default function ServerDetail({
       {tab === 'overview' && <Overview server={server} config={server.effectiveConfig} />}
       {tab === 'army' && <Army {...editorProps} />}
       {tab === 'buildings' && <BuildPlan {...editorProps} />}
-      {tab === 'raiding' && <Raiding {...editorProps} />}
+      {tab === 'raiding' && (
+        <Raiding
+          {...editorProps}
+          onAction={(a, message) => run(() => client.action(id, a), message)}
+          canRebuild={(meta.actions ?? []).includes('farm-rebuild')}
+        />
+      )}
       {tab === 'inactives' && <Inactives client={client} server={server} onChanged={refresh} />}
       {tab === 'logs' && (
         <div className="stack">

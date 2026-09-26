@@ -324,8 +324,10 @@ changes them per account; only the changed values are stored.
 - **Raiding oases:**
   - Only unoccupied oases with no animals are raided, and only through farm lists whose names
     start with `raid.listPrefix`. Other farm lists and "Start all farm lists" are never used.
-  - "Farm list setup" fills lists of up to 100 targets per unit type ("rainbow" farming): slow
-    infantry takes the nearest oases and cavalry the far ones.
+  - "Set up farm lists" (Raiding tab, or Run now) fills lists of up to 100 targets per unit type
+    ("rainbow" farming): slow infantry takes the nearest oases and cavalry the far ones.
+    "Rebuild from scratch" first empties the bot's own lists, then fills them again with the
+    current troop order (`node src/cli.js farm-rebuild` on the command line).
   - A wave goes out every `raid.everyMinutes` (10), whether or not earlier raids are back. The
     nearest targets go first, and troops at home are the limit.
   - Every target is checked on the live map right before sending.
