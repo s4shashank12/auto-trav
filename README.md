@@ -14,13 +14,14 @@ dashboard shows and manages them.
 │  dashboard/  │ ──────────────▶ │ Caddy │──▶│ backend (API + workers)  │──▶│ Postgres │
 │ React SPA    │   REST /api/*   └───────┘   │ one Chromium, a context  │   └──────────┘
 └──────────────┘                             │ per Travian account      │
-                                             └──────────────────────────┘
-       GitHub Actions ── merge to master ──▶ ghcr.io image ◀── Watchtower pulls updates
+       ▲                                     └──────────────────────────┘
+       │                                                  ▲
+       └──── GitHub Actions on merge to master ──▶ ghcr.io image ◀── Watchtower pulls updates
 ```
 
 - **`src/`**: the bot. It builds in small villages, ships resources, uses hero resources,
-  trains troops, reinforces when crop is low, and raids oases in waves. Every rule is a setting
-  (`src/config.js`).
+  trains troops, reinforces when crop is low, raids oases in waves and, if you switch it on,
+  raids inactive players. Every rule is a setting (`src/config.js`).
 - **`src/server/`**: the backend.
   - A REST API behind a bearer token.
   - Postgres storage, with Travian passwords encrypted using AES-256-GCM.
@@ -29,90 +30,206 @@ dashboard shows and manages them.
   - add Travian accounts on any game world;
   - start and stop them;
   - see villages, build queues, raids and training;
+  - find inactive players near you and raid them on a schedule;
   - read live logs and error screenshots;
   - run actions on demand;
   - edit every setting.
-- **`deploy/`**: `docker-compose.yml` for the VM, with Postgres, the backend, Watchtower and
-  Caddy.
+- **`deploy/`**:
+  - `docker-compose.yml` for the VM: Postgres, the backend, Watchtower and Caddy.
+  - `docker-compose.local.yml` for running the whole stack on your own machine.
 
-## Deploying
+## Releases (GitHub Actions)
 
-### 1. Container image (GitHub Actions → GHCR)
+`.github/workflows/release.yml` runs when a pull request merges to `master` (or from the
+Actions tab, via "Run workflow"). It does four things:
 
-`.github/workflows/docker.yml` builds the backend image:
+1. **Version.** Each release is `<major>.<minor>.<run number>` (for example `0.2.17`). Major and
+   minor come from `package.json`. The dashboard shows the version in its top bar. If the
+   backend's version differs, it is shown next to it, so you can see when the two are out of
+   step. `GET /api/health` also returns the version.
+2. **Backend image.** Built and pushed to `ghcr.io/s4shashank12/auto-travian` with the tags
+   `<version>`, `latest` and `sha-<commit>`.
+3. **Dashboard.** Built with the same version, then deployed to Firebase Hosting.
+4. **Cleanup.** Only the 5 newest builds are kept:
+   - Older images are deleted from GHCR.
+   - Firebase Hosting is told to keep only 5 releases, and deletes older ones itself.
 
-- **On every pull request:** checks that the image builds.
-- **When a PR merges to `master`:** pushes it to `ghcr.io/s4shashank12/auto-travian` as
-  `latest` and `sha-<commit>`.
+`.github/workflows/ci.yml` runs on every pull request. It runs the unit tests, builds the
+dashboard and checks that the image builds.
 
-It needs no secrets. The first push creates the package as **private**. Either make it public
-(the package's settings on GitHub), or give Watchtower a token with `read:packages` (step 2).
+### One-time GitHub setup
 
-`.github/workflows/ci.yml` runs the unit tests and builds the dashboard on every PR.
+- **Image visibility.** The first release creates the package as **private**. You have two
+  options:
+  - make it public: github.com → your profile → Packages → auto-travian → Package settings →
+    Change visibility;
+  - or give Watchtower a token (see `GHCR_USER`/`GHCR_TOKEN` in `deploy/.env.example`).
+- **Cleanup permission.** The cleanup job deletes images with the workflow's own token. It
+  needs the repository to have **Admin** under Package settings → Manage Actions access.
+  Packages first published by the workflow get this automatically. If the job fails with a
+  permission error, add the repository there with the Admin role.
+- **Firebase deploy.** It is skipped, with a notice, until these are set in Settings →
+  Secrets and variables → Actions:
 
-### 2. Backend on the VM
+  | Kind | Name | Value |
+  | --- | --- | --- |
+  | Secret | `FIREBASE_SERVICE_ACCOUNT` | JSON key of a service account with the **Firebase Hosting Admin** and **API Keys Viewer** roles. Create it under Google Cloud console → IAM → Service accounts, then Keys → Add key → JSON. |
+  | Variable | `FIREBASE_PROJECT_ID` | Your Firebase project id. |
+  | Variable | `API_URL` | Optional. The backend URL the connect form suggests, e.g. `https://34-12-56-78.sslip.io`. |
+  | Variable | `FIREBASE_SITE` | Optional. The Hosting site id, if it differs from the project id. |
 
-On a GCP VM with Docker (e2-small or larger; each account's browser context needs a few
-hundred MB):
+## Running on a GCP VM
+
+Only the `deploy/` folder is needed on the VM. The backend image comes from GHCR.
+
+### 1. Create the VM
+
+Chromium needs memory: plan on about 300 MB, plus a few hundred MB per Travian account.
+- **e2-small (2 GB):** fine for one or two accounts.
+- **e2-medium (4 GB):** for more accounts.
+- **e2-micro:** too small.
+
+From Cloud Shell, or anywhere with `gcloud`:
 
 ```bash
-git clone https://github.com/s4shashank12/auto-travian.git && cd auto-travian/deploy
-cp .env.example .env
-openssl rand -hex 32   # use one for ADMIN_TOKEN, another for APP_SECRET
-nano .env              # tokens, POSTGRES_PASSWORD, API_DOMAIN, CORS_ORIGINS
-# While the GHCR package is private:
-echo <token> | docker login ghcr.io -u <github-user> --password-stdin
-docker compose up -d
-docker compose logs -f backend
+gcloud compute addresses create travian-bot-ip --region=us-central1
+gcloud compute instances create travian-bot \
+  --zone=us-central1-a --machine-type=e2-small \
+  --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
+  --boot-disk-size=20GB --tags=http-server,https-server \
+  --address=travian-bot-ip
+gcloud compute firewall-rules create allow-web \
+  --allow=tcp:80,tcp:443 --target-tags=http-server,https-server
+gcloud compute addresses describe travian-bot-ip --region=us-central1 --format='value(address)'
 ```
 
-- **Database.** With `COMPOSE_PROFILES` including `local-db`, Postgres runs in the stack. To
-  use your own database instead, such as Cloud SQL or a managed Postgres:
-  1. remove `local-db` from `COMPOSE_PROFILES`;
-  2. set `DATABASE_URL` (plus `DATABASE_SSL=true` if the database requires TLS);
-  3. or use the standard `PGHOST`/`PGUSER`/… variables.
+Notes:
+- The console works too. Tick "Allow HTTP traffic" and "Allow HTTPS traffic", and reserve a
+  static external IP.
+- Ports 80 and 443 are for Caddy. Port 80 is only used to get the certificate. The API itself
+  is never exposed on 8080.
+- If `allow-web` already exists (the default `default-allow-http`/`https` rules do the same
+  job), skip that command.
 
-  Tables are created and migrated automatically on start.
-- **HTTPS.** The dashboard is served over HTTPS, so browsers only let it call an HTTPS API.
-  With the `https` profile, Caddy gets a Let's Encrypt certificate for `API_DOMAIN`:
-  1. point that name at the VM's external IP;
-  2. allow ports 80 and 443 in the VPC firewall.
+### 2. Install Docker
 
-  No domain? `<ip-with-dashes>.sslip.io` (for example `34-12-56-78.sslip.io`) works.
-- **Updates.** Watchtower checks GHCR every 5 minutes and restarts the backend on a new
-  image. Only containers labelled for it are touched, so Postgres and Caddy are never
-  restarted. Running accounts resume on their own (`AUTOSTART=true`).
-- **Backups.** Everything lives in the `pgdata` volume, or in your own database. For example:
-  `docker compose exec db pg_dump -U travian travian > backup.sql`.
+```bash
+gcloud compute ssh travian-bot --zone=us-central1-a
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER && newgrp docker
+docker compose version          # Docker Compose v2 is included
+```
 
-### 3. Dashboard on Firebase Hosting
+### 3. Get the deploy files and configure them
+
+```bash
+git clone https://github.com/s4shashank12/auto-travian.git
+cd auto-travian/deploy
+cp .env.example .env
+openssl rand -hex 32            # run twice: one value for ADMIN_TOKEN, one for APP_SECRET
+nano .env
+```
+
+Private repository? Either clone it with a token
+(`git clone https://<user>:<token>@github.com/...`), or copy just the folder from your
+computer: `gcloud compute scp --recurse deploy travian-bot:~ --zone=us-central1-a`.
+
+In `.env`, set at least:
+
+| Variable | What to put |
+| --- | --- |
+| `ADMIN_TOKEN` | A random value. You type it into the dashboard to connect. |
+| `APP_SECRET` | Another random value. It encrypts the stored Travian passwords, so keep it: changing it means re-entering them. |
+| `POSTGRES_PASSWORD` | Any password for the bundled Postgres. |
+| `API_DOMAIN` | A name pointing at the VM's IP. No domain? Use `<ip-with-dashes>.sslip.io`, e.g. `34-12-56-78.sslip.io`. |
+| `CORS_ORIGINS` | Your dashboard URLs: `https://<project>.web.app,https://<project>.firebaseapp.com`. |
+| `COMPOSE_PROFILES` | `local-db,https` (the default). This runs Postgres and Caddy on the VM. |
+
+**Using your own database** (Cloud SQL, a managed Postgres, …):
+1. Drop `local-db` from `COMPOSE_PROFILES`.
+2. Set `DATABASE_URL=postgres://user:password@host:5432/dbname`.
+3. Add `DATABASE_SSL=true` if the database requires TLS.
+
+Tables are created and migrated on start.
+
+### 4. Start it
+
+```bash
+# Only while the GHCR package is private:
+echo <github-token-with-read:packages> | docker login ghcr.io -u <github-user> --password-stdin
+
+docker compose up -d
+docker compose ps                         # backend "healthy", db "healthy", caddy and watchtower up
+curl https://<API_DOMAIN>/api/health      # {"ok":true,"version":"0.2.17"}
+```
+
+Then open the dashboard on Firebase:
+1. Enter `https://<API_DOMAIN>` and your `ADMIN_TOKEN`.
+2. Add your Travian accounts (game world URL, username, password).
+3. Press Start.
+
+Accounts that were running start again by themselves after a restart or update
+(`AUTOSTART=true`).
+
+> Run each Travian account in one place only. Two bots on the same account fight over the
+> build queue and the active village. Stop any other copy before starting it on the VM.
+
+### 5. Day to day
+
+| Task | Command (in `~/auto-travian/deploy`) |
+| --- | --- |
+| Logs | `docker compose logs -f backend` (the dashboard's Logs tab shows the same per account) |
+| Update now | Watchtower checks GHCR every 5 minutes and restarts the backend on a new image. To force it: `docker compose pull backend && docker compose up -d backend`. |
+| Which version is running | `curl https://<API_DOMAIN>/api/health`, or the version pill in the dashboard |
+| Pin a version | Set `IMAGE=ghcr.io/s4shashank12/auto-travian:0.2.17` in `.env`, then `docker compose up -d`. |
+| Restart | `docker compose restart backend` |
+| Stop everything | `docker compose down` (data stays in the volumes) |
+| Back up | `docker compose exec db pg_dump -U travian travian > backup-$(date +%F).sql` |
+| Restore | `docker compose exec -T db psql -U travian travian < backup.sql` |
+| Change settings in `.env` | `docker compose up -d` (recreates what changed) |
+
+Watchtower only touches containers labelled for it. Postgres and Caddy are never restarted by
+it.
+
+## Dashboard on Firebase Hosting
+
+After the one-time setup above, every release deploys it. To deploy by hand instead:
 
 ```bash
 cd dashboard
 npm ci
-VITE_API_URL=https://api.example.com npm run build   # optional: pre-fills the connect form
+VITE_API_URL=https://api.example.com VITE_APP_VERSION=manual npm run build
 npx firebase-tools login
 npx firebase-tools deploy --only hosting --project <your-firebase-project-id>
 ```
 
-Put the site's URLs (`https://<project>.web.app`, `https://<project>.firebaseapp.com`) in the
-backend's `CORS_ORIGINS`. Open the site, enter the backend URL and `ADMIN_TOKEN`, and add your
-accounts.
+## Running the whole stack locally
 
-`.github/workflows/dashboard.yml` can deploy it on every merge instead. It stays skipped until
-these are set:
-- the repository secret `FIREBASE_SERVICE_ACCOUNT` (a service account JSON key with Firebase
-  Hosting Admin);
-- the repository variables `FIREBASE_PROJECT_ID` and `API_URL`.
+`deploy/docker-compose.local.yml` builds the backend and dashboard from this checkout and runs
+them with Postgres. Everything is bound to 127.0.0.1:
 
-### Security notes
+```bash
+cd deploy
+docker compose -f docker-compose.local.yml up -d --build
+# dashboard: http://localhost:8081   backend: http://localhost:8080   token: local-admin-token-change-me
+docker compose -f docker-compose.local.yml down        # add -v to also delete the data
+```
+
+Notes:
+- `ADMIN_TOKEN`, `APP_SECRET`, `APP_VERSION`, `BACKEND_PORT` and `DASHBOARD_PORT` can be set in
+  the environment.
+- `AUTOSTART` is off here, so a local copy never quietly starts playing an account the VM also
+  plays.
+- Turn on "Dry run" in an account's settings to see what the bot would do without clicking
+  anything.
+
+## Security notes
 
 - Every API route except `/api/health` needs `Authorization: Bearer <ADMIN_TOKEN>`. Repeated
   wrong tokens from one IP are refused for 10 minutes.
 - The backend listens on `127.0.0.1:8080` by default, and only Caddy is exposed.
-- Travian passwords are encrypted with a key derived from `APP_SECRET`. The API never returns
-  them. Keep `APP_SECRET` safe: changing it makes stored passwords unreadable, so you would
-  have to re-enter them.
+- Travian passwords are encrypted with a key derived from `APP_SECRET`, and the API never
+  returns them.
 - The dashboard keeps the backend URL and token in the browser's localStorage. Use Disconnect
   on shared machines.
 
@@ -142,7 +259,7 @@ changes them per account; only the changed values are stored.
 - **Reinforcement:** a village whose crop would drop under 200/h stops training and sends
   troops to the capital (or `reinforce.target`), until it is back to 600/h. That happens only
   while the target keeps at least 2,000/h.
-- **Raiding:**
+- **Raiding oases:**
   - Only unoccupied oases with no animals are raided, and only through farm lists whose names
     start with `raid.listPrefix`. Other farm lists and "Start all farm lists" are never used.
   - "Farm list setup" fills lists of up to 100 targets per unit type ("rainbow" farming): slow
@@ -152,6 +269,21 @@ changes them per account; only the changed values are stored.
   - Every target is checked on the live map right before sending.
   - Raids carry 10 infantry or 5 cavalry: a lone unit sometimes dies even against an empty
     oasis's base defence.
+- **Inactive players** (off until you switch it on in the "Inactive players" tab):
+  - **Detection.** Once a day the bot downloads the game world's public `map.sql` (every
+    village with its owner and population) and keeps 14 days of it. A player counts as
+    inactive when their total population has not grown in `inactive.days` (3) days, so the
+    list appears after 4 daily snapshots.
+  - **Filters:** distance (`radius`), village population range, your own alliance, Natars and
+    nature, and any alliances or players you skip.
+  - **Farm lists.** Targets go into "Inactives (auto)" farm lists at the nearest village that
+    has enough of a raiding unit (by default 10 Equites Imperatoris or Caesaris, else 20
+    Imperians or Legionnaires). Targets that start growing again are removed.
+  - **Schedule.** Each target is raided at most every `inactive.everyMinutes` (60),
+    optionally only within `inactive.hours` (e.g. `6-23` in your timezone).
+  - The tab lists the current targets, and "Skip player" leaves a player alone from then on.
+  - Inactive accounts can still have troops or defences at home. Watch the first reports and
+    raise the troops per raid if raids come back with losses.
 
 ## Development
 
@@ -169,6 +301,8 @@ The single-account command line still works without Postgres. Credentials come f
 ```bash
 npm run villages | build | train | raid | farm-setup | play
 npm run loop                             # play until stopped
+node src/cli.js world                    # import today's map.sql (the loop does this daily)
+node src/cli.js inactives                # list inactive players near your villages
 DRY_RUN=true npm run play                # log what would happen without clicking
 ```
 
