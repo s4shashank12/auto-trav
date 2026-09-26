@@ -15,6 +15,28 @@ const toInt = (text) => {
   return Number.isNaN(n) ? null : n;
 };
 
+// Chromium settings that keep memory low (the backend runs on 1 GB VMs): no /dev/shm, GPU,
+// extensions or background services, fewer renderer processes, and no images unless
+// LOAD_IMAGES=true (the bot reads the page, it doesn't need to see it).
+export function launchOptions({ headless = true, loadImages = /^(1|true|yes)$/i.test(process.env.LOAD_IMAGES ?? '') } = {}) {
+  const args = [
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-sync',
+    '--no-first-run',
+    '--mute-audio',
+    '--renderer-process-limit=2',
+    '--disable-site-isolation-trials',
+    '--disable-features=site-per-process,IsolateOrigins,Translate,MediaRouter,OptimizationHints',
+  ];
+  if (!loadImages) args.push('--blink-settings=imagesEnabled=false');
+  return { headless, args };
+}
+
 // Saved login (cookies) kept in a JSON file; the server keeps it in Postgres instead.
 export const fileSession = (file = '.auth/state.json') => ({
   load: async () => JSON.parse(await fs.readFile(file, 'utf8').catch(() => 'null')),
@@ -45,7 +67,7 @@ export class Travian {
   }
 
   async start() {
-    this.browser = this.sharedBrowser ?? await chromium.launch({ headless: this.headless });
+    this.browser = this.sharedBrowser ?? await chromium.launch(launchOptions({ headless: this.headless }));
     const storageState = await this.session.load().catch(() => null);
     this.context = await this.browser.newContext({
       storageState: storageState ?? undefined,
@@ -61,6 +83,8 @@ export class Travian {
   }
 
   async close() {
+    // Keep the cookies the game refreshed during this session for the next one.
+    if (this.context && this.loggedIn) await this.context.storageState().then((st) => this.session.save(st)).catch(() => {});
     await this.context?.close().catch(() => {});
     if (!this.sharedBrowser) await this.browser?.close();
   }
@@ -129,6 +153,7 @@ export class Travian {
     }
     await this.dismissCookieBanner();
     await this.session.save(await this.context.storageState());
+    this.loggedIn = true;
   }
 
   // Calls the same JSON endpoints the game's own pages use, with the logged-in session.

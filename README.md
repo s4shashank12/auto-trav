@@ -47,7 +47,7 @@ Actions tab, via "Run workflow"). It does four things:
    minor come from `package.json`. The dashboard shows the version in its top bar. If the
    backend's version differs, it is shown next to it, so you can see when the two are out of
    step. `GET /api/health` also returns the version.
-2. **Backend image.** Built and pushed to `ghcr.io/s4shashank12/auto-travian` with the tags
+2. **Backend image.** Built and pushed to `ghcr.io/s4shashank12/auto-trav` with the tags
    `<version>`, `latest` and `sha-<commit>`.
 3. **Dashboard.** Built with the same version, then deployed to Firebase Hosting.
 4. **Cleanup.** Only the 5 newest builds are kept:
@@ -61,22 +61,23 @@ dashboard and checks that the image builds.
 
 - **Image visibility.** The first release creates the package as **private**. You have two
   options:
-  - make it public: github.com → your profile → Packages → auto-travian → Package settings →
+  - make it public: github.com → your profile → Packages → auto-trav → Package settings →
     Change visibility;
   - or give Watchtower a token (see `GHCR_USER`/`GHCR_TOKEN` in `deploy/.env.example`).
 - **Cleanup permission.** The cleanup job deletes images with the workflow's own token. It
   needs the repository to have **Admin** under Package settings → Manage Actions access.
   Packages first published by the workflow get this automatically. If the job fails with a
   permission error, add the repository there with the Admin role.
-- **Firebase deploy.** It is skipped, with a notice, until these are set in Settings →
-  Secrets and variables → Actions:
+- **Firebase deploy.** It is skipped, with a warning naming what is missing, until these are
+  set in Settings → Secrets and variables → Actions, as *repository* secrets and variables (not
+  environment, Codespaces or Dependabot ones):
 
   | Kind | Name | Value |
   | --- | --- | --- |
   | Secret | `FIREBASE_SERVICE_ACCOUNT` | JSON key of a service account with the **Firebase Hosting Admin** and **API Keys Viewer** roles. Create it under Google Cloud console → IAM → Service accounts, then Keys → Add key → JSON. |
-  | Variable | `FIREBASE_PROJECT_ID` | Your Firebase project id. |
+  | Variable | `FIREBASE_PROJECT_ID` | Your Firebase project id. A repository secret with this name works too. |
   | Variable | `API_URL` | Optional. The backend URL the connect form suggests, e.g. `https://34-12-56-78.sslip.io`. |
-  | Variable | `FIREBASE_SITE` | Optional. The Hosting site id, if it differs from the project id. |
+  | Variable | `FIREBASE_SITE` | Optional. The Hosting site to deploy to. Defaults to `"site"` in `dashboard/firebase.json` (`auto-travian`, i.e. https://auto-travian.web.app). |
 
 ## Running on a GCP VM
 
@@ -84,10 +85,17 @@ Only the `deploy/` folder is needed on the VM. The backend image comes from GHCR
 
 ### 1. Create the VM
 
-Chromium needs memory: plan on about 300 MB, plus a few hundred MB per Travian account.
-- **e2-small (2 GB):** fine for one or two accounts.
-- **e2-medium (4 GB):** for more accounts.
-- **e2-micro:** too small.
+The backend is built for small VMs:
+- the image is about 200 MB to download (Node plus Chromium's headless shell only);
+- Chromium only runs during a round and closes about a minute later, without loading images.
+
+A round peaks around 450 MB and the backend idles at about 60 MB; Postgres, Caddy and
+Watchtower add about 60 MB more. So:
+- **e2-micro (1 GB, free tier):** fine for one or two accounts, with 2 GB of swap (below).
+- **e2-small (2 GB):** comfortable for a few accounts.
+
+Memory limits (`BACKEND_MEM_LIMIT`, `DB_MEM_LIMIT` in `.env`) keep the bot from starving
+other programs on the VM.
 
 From Cloud Shell, or anywhere with `gcloud`:
 
@@ -111,20 +119,25 @@ Notes:
 - If `allow-web` already exists (the default `default-allow-http`/`https` rules do the same
   job), skip that command.
 
-### 2. Install Docker
+### 2. Install Docker (and swap on a 1 GB VM)
 
 ```bash
 gcloud compute ssh travian-bot --zone=us-central1-a
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER && newgrp docker
 docker compose version          # Docker Compose v2 is included
+
+# 1 GB VMs: 2 GB of swap absorbs the short peaks of a round.
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
 ### 3. Get the deploy files and configure them
 
 ```bash
-git clone https://github.com/s4shashank12/auto-travian.git
-cd auto-travian/deploy
+git clone https://github.com/s4shashank12/auto-trav.git
+cd auto-trav/deploy
 cp .env.example .env
 openssl rand -hex 32            # run twice: one value for ADMIN_TOKEN, one for APP_SECRET
 nano .env
@@ -190,8 +203,19 @@ docker compose ps                         # backend "healthy", db "healthy", cad
 curl https://<API_DOMAIN>/api/health      # {"ok":true,"version":"0.2.17"}
 ```
 
+**Ports 80 or 443 already in use** (another web server on the VM)? Use the `https-port`
+profile instead: set `COMPOSE_PROFILES=local-db,https-port` and `API_PORT=15678` (any port
+open in the firewall).
+- Let's Encrypt can only verify a domain on ports 80/443, so Caddy uses its own certificate
+  there, valid for a year and renewed automatically.
+- Before the first connection, open `https://<API_DOMAIN>:15678/api/health` in each browser you
+  use and accept the certificate warning.
+- In the dashboard, the backend URL is then `https://<API_DOMAIN>:15678`.
+- If the other web server already has HTTPS for a domain, a cleaner option is to proxy a
+  hostname or path there to `127.0.0.1:8080`, and run without Caddy.
+
 Then open the dashboard on Firebase:
-1. Enter `https://<API_DOMAIN>` and your `ADMIN_TOKEN`.
+1. Enter `https://<API_DOMAIN>` (plus `:API_PORT` with `https-port`) and your `ADMIN_TOKEN`.
 2. Add your Travian accounts (game world URL, username, password).
 3. Press Start.
 
@@ -203,12 +227,12 @@ Accounts that were running start again by themselves after a restart or update
 
 ### 5. Day to day
 
-| Task | Command (in `~/auto-travian/deploy`) |
+| Task | Command (in `~/auto-trav/deploy`) |
 | --- | --- |
 | Logs | `docker compose logs -f backend` (the dashboard's Logs tab shows the same per account) |
 | Update now | Watchtower checks GHCR every 5 minutes and restarts the backend on a new image. To force it: `docker compose pull backend && docker compose up -d backend`. |
 | Which version is running | `curl https://<API_DOMAIN>/api/health`, or the version pill in the dashboard |
-| Pin a version | Set `IMAGE=ghcr.io/s4shashank12/auto-travian:0.2.17` in `.env`, then `docker compose up -d`. |
+| Pin a version | Set `IMAGE=ghcr.io/s4shashank12/auto-trav:0.2.17` in `.env`, then `docker compose up -d`. |
 | Restart | `docker compose restart backend` |
 | Stop everything | `docker compose down` (data stays in the volumes) |
 | Back up | `docker compose exec db pg_dump -U travian travian > backup-$(date +%F).sql` |

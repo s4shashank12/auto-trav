@@ -1,8 +1,11 @@
 # Production stack for a VM. Copy this folder to the VM, fill in .env (see .env.example), then:
 #   docker compose up -d
 # Profiles (set COMPOSE_PROFILES in .env):
-#   local-db  run Postgres here (leave it out and set DATABASE_URL to use another database)
-#   https     run Caddy in front of the API with automatic HTTPS for API_DOMAIN
+#   local-db    run Postgres here (leave it out and set DATABASE_URL to use another database)
+#   https       run Caddy on ports 80 and 443 with a Let's Encrypt certificate for API_DOMAIN
+#   https-port  run Caddy on API_PORT only (e.g. 15678, when 80/443 are taken) with its own
+#               certificate; see the Caddyfile
+# Sized for small VMs (1 GB): memory limits below, overridable in .env.
 
 services:
   db:
@@ -13,6 +16,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-travian}
       POSTGRES_USER: ${POSTGRES_USER:-travian}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    # Small-memory settings; the bot's database is tiny.
+    command: >-
+      postgres -c shared_buffers=32MB -c effective_cache_size=128MB -c work_mem=2MB
+      -c maintenance_work_mem=16MB -c max_connections=20 -c max_wal_size=256MB
+    mem_limit: ${DB_MEM_LIMIT:-192m}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +30,7 @@ services:
       retries: 10
 
   backend:
-    image: ${IMAGE:-ghcr.io/s4shashank12/auto-travian:latest}
+    image: ${IMAGE:-ghcr.io/s4shashank12/auto-trav:latest}
     restart: unless-stopped
     environment:
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
@@ -37,6 +45,10 @@ services:
       DATABASE_SSL_KEY: ${DATABASE_SSL_KEY:-}
       AUTOSTART: ${AUTOSTART:-true}
       EVENTS_RETENTION_DAYS: ${EVENTS_RETENTION_DAYS:-7}
+      # Chromium only runs during rounds and closes this long after the last one.
+      BROWSER_IDLE_SECONDS: ${BROWSER_IDLE_SECONDS:-60}
+      LOAD_IMAGES: ${LOAD_IMAGES:-false}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-5}
       DATA_DIR: /data
     depends_on:
       db:
@@ -46,8 +58,9 @@ services:
       - data:/data
       # Certificates for a database that needs them, e.g. DATABASE_SSL_CA=/certs/server-ca.pem.
       - ./certs:/certs:ro
-    # Chromium needs more shared memory than Docker's 64 MB default.
-    shm_size: 1gb
+    # Chromium runs with --disable-dev-shm-usage, so no large /dev/shm is needed. The limit keeps
+    # a runaway browser from starving other programs on the VM (a round peaks around 450 MB).
+    mem_limit: ${BACKEND_MEM_LIMIT:-600m}
     ports:
       - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8080}:8080"
     labels:
@@ -59,6 +72,7 @@ services:
     image: containrrr/watchtower:latest
     restart: unless-stopped
     command: --label-enable --cleanup
+    mem_limit: 64m
     environment:
       WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-300}
       # Newer Docker engines reject the old API version Watchtower asks for by default.
@@ -75,9 +89,27 @@ services:
     restart: unless-stopped
     environment:
       API_DOMAIN: ${API_DOMAIN:-}
+      API_TLS: auto
+    mem_limit: 96m
     ports:
       - "80:80"
       - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # Same, on one custom port with Caddy's own certificate (for VMs where 80/443 are taken).
+  caddy-port:
+    image: caddy:2-alpine
+    profiles: [https-port]
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-}
+      API_TLS: internal
+    mem_limit: 96m
+    ports:
+      - "${API_PORT:-15678}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

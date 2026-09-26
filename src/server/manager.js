@@ -1,8 +1,10 @@
 import { chromium } from 'playwright';
+import { launchOptions } from '../travian.js';
 import { BotWorker } from './worker.js';
 
 // Owns one Chromium shared by every account (each gets its own browser context) and one worker
-// per server row.
+// per server row. Workers borrow the browser for a round and give it back; once nobody has used
+// it for env.browserIdleSeconds it is closed, so it takes no memory while the bots sleep.
 export class BotManager {
   constructor({ repo, env, pool }) {
     this.repo = repo;
@@ -11,12 +13,14 @@ export class BotManager {
     this.workers = new Map();
     this.browser = null;
     this.launching = null;
+    this.users = 0;
+    this.idleTimer = null;
   }
 
   async getBrowser() {
     if (this.browser?.isConnected()) return this.browser;
     if (!this.launching) {
-      this.launching = chromium.launch({ headless: this.env.headless }).then((b) => {
+      this.launching = chromium.launch(launchOptions({ headless: this.env.headless })).then((b) => {
         this.browser = b;
         this.launching = null;
         return b;
@@ -28,12 +32,38 @@ export class BotManager {
     return this.launching;
   }
 
+  async acquireBrowser() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    this.users += 1;
+    try {
+      return await this.getBrowser();
+    } catch (err) {
+      this.users -= 1;
+      throw err;
+    }
+  }
+
+  releaseBrowser() {
+    this.users = Math.max(0, this.users - 1);
+    if (this.users > 0 || this.idleTimer) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.users > 0 || !this.browser) return;
+      const { browser } = this;
+      this.browser = null;
+      browser.close().catch(() => {});
+    }, this.env.browserIdleSeconds * 1000);
+    this.idleTimer.unref?.();
+  }
+
   worker(id) {
     if (!this.workers.has(id)) {
       this.workers.set(id, new BotWorker(id, {
         repo: this.repo,
         pool: this.pool,
-        getBrowser: () => this.getBrowser(),
+        acquireBrowser: () => this.acquireBrowser(),
+        releaseBrowser: () => this.releaseBrowser(),
         dataDir: this.env.dataDir,
       }));
     }
@@ -82,6 +112,7 @@ export class BotManager {
 
   async shutdown() {
     await Promise.all([...this.workers.values()].map((w) => w.stop({ force: true }).catch(() => {})));
+    clearTimeout(this.idleTimer);
     await this.browser?.close().catch(() => {});
   }
 }

@@ -1,7 +1,35 @@
 # HTTPS in front of the API (the Firebase-hosted dashboard can only call an https:// API).
-# Caddy gets and renews a Let's Encrypt certificate for API_DOMAIN automatically; point the
-# domain's DNS at the VM and open ports 80 and 443. No domain? <vm-ip-with-dashes>.sslip.io works.
+#
+# Profile "https" (ports 80 and 443): Caddy gets and renews a Let's Encrypt certificate for
+# API_DOMAIN. Point the domain at the VM; no domain? <vm-ip-with-dashes>.sslip.io works.
+#
+# Profile "https-port" (only API_PORT, e.g. 15678, when 80/443 are taken): Let's Encrypt can only
+# check a domain on ports 80/443, so Caddy uses its own certificate instead (API_TLS=internal,
+# valid a year, renewed automatically). Open https://API_DOMAIN:API_PORT/api/health once in each
+# browser you use and accept the certificate warning; after that the dashboard can connect.
+#
+# Either way, use API_DOMAIN in the dashboard, not the bare IP: Caddy answers by host name.
+{
+	pki {
+		ca local {
+			intermediate_lifetime 1825d
+		}
+	}
+}
+
+(tls-auto) {
+}
+
+(tls-internal) {
+	tls {
+		issuer internal {
+			lifetime 365d
+		}
+	}
+}
+
 {$API_DOMAIN} {
+	import tls-{$API_TLS:auto}
 	encode gzip
 	reverse_proxy backend:8080
 }

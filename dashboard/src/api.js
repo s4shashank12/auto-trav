@@ -48,7 +48,7 @@ export function createClient({ url, token }) {
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
     } catch {
-      throw new ApiError(`Cannot reach ${base}. Check the URL, HTTPS and the backend's CORS_ORIGINS.`, 0);
+      throw new ApiError(`Cannot reach ${base}. Check the URL, HTTPS and the backend's CORS_ORIGINS. If the backend uses its own certificate (https-port), open ${base}/api/health in a new tab and accept it first.`, 0);
     }
     if (res.status === 204) return null;
     const data = await res.json().catch(() => null);
