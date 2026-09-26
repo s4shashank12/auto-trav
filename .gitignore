@@ -3,3 +3,8 @@ node_modules/
 .auth/
 screenshots/
 logs/
+bot.config.json
+data/
+dashboard/node_modules/
+dashboard/dist/
+deploy/.env
