@@ -10,7 +10,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -32,6 +34,7 @@ class BotService : Service(), BotEngine.Listener {
         private const val TAG = "auto-naitra"
         private const val CHANNEL = "bot"
         private const val NOTIFICATION_ID = 1
+        private const val WAKE_LOCK_MS = 2 * 3_600_000L // renewed every hour while accounts run
         const val ACTION_STOP_ALL = "com.autonaitra.app.STOP_ALL"
 
         fun start(context: Context) {
@@ -51,6 +54,13 @@ class BotService : Service(), BotEngine.Listener {
     private var busy = 0
     private var accounts: List<Account> = emptyList()
     private var wakeLock: PowerManager.WakeLock? = null
+    private val main = Handler(Looper.getMainLooper())
+    private val renewWakeLock = object : Runnable {
+        override fun run() {
+            wakeLock?.acquire(WAKE_LOCK_MS)
+            main.postDelayed(this, WAKE_LOCK_MS / 2)
+        }
+    }
 
     lateinit var engine: BotEngine
         private set
@@ -123,16 +133,20 @@ class BotService : Service(), BotEngine.Listener {
         stopSelf()
     }
 
+    // Held with a timeout (so Android ends it if the app ever forgets), renewed while accounts run.
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "auto-naitra:bot").apply {
             setReferenceCounted(false)
-            acquire()
+            acquire(WAKE_LOCK_MS)
         }
+        main.removeCallbacks(renewWakeLock)
+        main.postDelayed(renewWakeLock, WAKE_LOCK_MS / 2)
     }
 
     private fun releaseWakeLock() {
+        main.removeCallbacks(renewWakeLock)
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
     }

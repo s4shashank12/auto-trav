@@ -186,7 +186,8 @@ class BotEngine(private val context: Context, private val listener: Listener) {
         JSONObject().put("error", e.message ?: e.toString()).toString()
     }
 
-    private inner class Bridge {
+    // Public, as WebView requires of the objects it exposes to JavaScript.
+    inner class Bridge {
         @JavascriptInterface
         fun deviceInfo(): String {
             val webView = WebViewCompat.getCurrentWebViewPackage(context)

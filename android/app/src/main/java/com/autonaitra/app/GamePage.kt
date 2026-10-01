@@ -20,6 +20,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.ProfileStore
+import androidx.webkit.UserAgentMetadata
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.io.File
@@ -101,6 +103,18 @@ class GamePage(
             setSupportMultipleWindows(false)
             cacheMode = WebSettings.LOAD_DEFAULT
             userAgentString = desktopUserAgent(userAgentString)
+        }
+        // Client hints say the same as the user agent: a desktop, not a phone.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) {
+            try {
+                val current = WebSettingsCompat.getUserAgentMetadata(view.settings)
+                WebSettingsCompat.setUserAgentMetadata(
+                    view.settings,
+                    UserAgentMetadata.Builder(current).setMobile(false).setPlatform("Linux").setPlatformVersion("").setModel("").build(),
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "user agent metadata not set: ${e.message}")
+            }
         }
         view.setBackgroundColor(Color.WHITE)
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)

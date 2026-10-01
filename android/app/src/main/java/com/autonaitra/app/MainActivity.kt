@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var container: FrameLayout
     private var web: WebView? = null
     private var service: BotService? = null
+    private var bound = false
     private val pending = mutableListOf<() -> Unit>()
 
     private val connection = object : ServiceConnection {
@@ -89,13 +90,14 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             Log.w(TAG, "could not start the service: ${e.message}")
         }
-        bindService(Intent(this, BotService::class.java), connection, Context.BIND_AUTO_CREATE)
+        bound = bindService(Intent(this, BotService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
 
     override fun onStop() {
         service?.apiListener = null
         service = null
-        unbindService(connection)
+        if (bound) unbindService(connection)
+        bound = false
         super.onStop()
     }
 
@@ -174,7 +176,7 @@ class MainActivity : Activity() {
         (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
 
     /** What the dashboard calls (window.AutoNaitraAndroid). Runs on WebView's bridge thread. */
-    private inner class UiBridge {
+    inner class UiBridge {
         @android.webkit.JavascriptInterface
         fun request(requestId: Int, method: String, path: String, body: String) {
             runOnUiThread {

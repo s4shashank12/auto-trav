@@ -39,9 +39,22 @@ dashboard shows and manages them.
   - find inactive players near you and raid them on a schedule;
   - read live logs and error screenshots, run actions on demand, and edit every other setting.
   Changes on any tab are collected and saved together.
+- **`android/`**: an Android app that runs the whole bot on a phone, with its own SQLite database
+  and the same dashboard. No server needed (see [android/README.md](android/README.md)).
 - **`deploy/`**:
   - `docker-compose.yml` for the VM: Postgres, the backend, Watchtower and Caddy.
   - `docker-compose.local.yml` for running the whole stack on your own machine.
+
+## Android app
+
+`android/` builds an APK that plays your accounts on the phone itself:
+- The bot is the same `src/` code, running in an off-screen WebView inside a foreground service.
+- Storage is SQLite on the phone.
+- The UI is this dashboard, with every editor and setting.
+
+The **Android** workflow builds the APK on every pull request and push. Download it from the
+run's artifacts. A `v*` tag also attaches it to a GitHub release. Installing, building and how
+it works: [android/README.md](android/README.md).
 
 ## Releases (GitHub Actions)
 
