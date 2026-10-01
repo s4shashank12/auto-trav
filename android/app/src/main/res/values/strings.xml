@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">auto-naitra</string>
+    <string name="channel_name">Bot status</string>
+    <string name="channel_description">Shows while the bot is running on this phone.</string>
+    <string name="notif_idle">Bot engine ready, no account running</string>
+    <string name="notif_stop_all">Stop all</string>
+</resources>

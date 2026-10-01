@@ -1,0 +1,14 @@
+{
+  "name": "auto-naitra-android-engine",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "description": "The bot engine of the Android app: src/ bundled with WebView and SQLite adapters.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test --test-concurrency=1 --test-timeout=600000 test/*.test.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

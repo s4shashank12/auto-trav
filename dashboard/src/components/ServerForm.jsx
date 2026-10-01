@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isAndroid } from '../api.js';
 import { navigate } from '../util.js';
 
 // Add a server (Travian account on one game world), or edit its name and credentials.
@@ -65,7 +66,11 @@ export default function ServerForm({ client, server = null, onSaved }) {
             value={form.password}
             onChange={set('password')}
           />
-          <small className="muted">Stored encrypted on your backend; never shown again.</small>
+          <small className="muted">
+            {isAndroid
+              ? 'Stored encrypted on this phone (with a key in the Android Keystore); never shown again.'
+              : 'Stored encrypted on your backend; never shown again.'}
+          </small>
         </label>
         {!editing && (
           <>

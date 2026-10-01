@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  APP_VERSION, createClient, loadConnection, saveConnection,
+  APP_VERSION, createClient, isAndroid, loadConnection, saveConnection,
 } from './api.js';
 import Connect from './components/Connect.jsx';
 import ServerDetail from './components/ServerDetail.jsx';
@@ -71,13 +71,15 @@ function Sidebar({
             {theme === 'auto' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'}
           </button>
           <div className="muted small side-meta">
-            <span title={`Backend ${client.base}`}>{hostOf(client.base)}</span>
+            {isAndroid
+              ? <span title="The bot runs on this phone">This phone</span>
+              : <span title={`Backend ${client.base}`}>{hostOf(client.base)}</span>}
             <span className="version" title={`Dashboard ${APP_VERSION} · Backend ${meta?.version ?? '…'}`}>
               v{APP_VERSION}
               {meta?.version && meta.version !== APP_VERSION ? ` · API v${meta.version}` : ''}
             </span>
           </div>
-          <button type="button" className="link small" onClick={onDisconnect}>Disconnect</button>
+          {!isAndroid && <button type="button" className="link small" onClick={onDisconnect}>Disconnect</button>}
         </div>
       </nav>
     </>

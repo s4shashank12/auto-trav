@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { isAndroid } from '../api.js';
 import {
   hostOf, timeAgo, timeUntil, usePoll,
 } from '../util.js';
+import PhoneCard from './PhoneCard.jsx';
 import { Icon, StatTile, StatusBadge } from './ui.jsx';
 
 function summary(snapshot) {
@@ -34,11 +36,12 @@ export default function ServerList({ client }) {
       <div className="page-head">
         <div>
           <h1>Servers</h1>
-          <p className="muted small">Every Travian account this backend plays.</p>
+          <p className="muted small">Every Travian account {isAndroid ? 'this phone' : 'this backend'} plays.</p>
         </div>
         <a className="btn primary" href="#/new"><Icon name="plus" /> Add server</a>
       </div>
       {error && <p className="error">{error.message}</p>}
+      <PhoneCard />
       {loading && !servers && <p className="muted">Loading…</p>}
       {servers?.length === 0 && (
         <div className="card empty">

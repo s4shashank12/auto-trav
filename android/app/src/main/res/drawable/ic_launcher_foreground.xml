@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- The 32x32 favicon path, scaled 2.25x and centred in the 72dp safe zone. -->
+    <group android:translateX="18" android:translateY="18" android:scaleX="2.25" android:scaleY="2.25">
+        <path android:fillColor="@color/brand_ink" android:pathData="M8,23V11l8,-4 8,4v12h-5v-6h-6v6z" />
+    </group>
+</vector>

@@ -463,3 +463,15 @@ tbody tr:hover td { background: var(--surface-2); }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis.mini { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+
+/* Android app: the phone's background-running checklist */
+.phone-card { margin-bottom: 16px; }
+.phone-card h3 { margin: 0 0 2px; }
+.phone-checks { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 10px; }
+.phone-checks li { display: flex; align-items: flex-start; gap: 10px; }
+.phone-checks li > div { flex: 1; min-width: 0; }
+.phone-checks li p { margin: 2px 0 0; }
+.phone-checks li > .icon { margin-top: 3px; flex: none; }
+.phone-checks li.ok > .icon { color: var(--good); }
+.phone-checks li.todo > .icon { color: var(--serious); }
+.phone-checks .btn { flex: none; }
